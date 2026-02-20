@@ -52,7 +52,7 @@ export function GameHud({
 }: GameHudProps) {
   const [chatInput, setChatInput] = useState('')
 
-  const healthPercent = maxHealth > 0 ? Math.max(0, Math.round((health / maxHealth) * 100)) : 0
+  const healthPercent = maxHealth > 0 ? Math.min(100, Math.max(0, Math.round((health / maxHealth) * 100))) : 0
 
   const leaderboard = useMemo(() => {
     return [...players].sort((first, second) => second.point - first.point).slice(0, 5)

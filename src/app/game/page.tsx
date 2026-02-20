@@ -54,6 +54,7 @@ export default function GamePage() {
   const [spectating, setSpectating] = useState(false)
 
   const pressedKeysRef = useRef<Set<string>>(new Set())
+  const movementRef = useRef<Movement>({ ...DEFAULT_MOVEMENT })
 
   const nickname = useMemo(() => {
     if (typeof window === 'undefined') return 'Player'
@@ -62,7 +63,10 @@ export default function GamePage() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('nickname', nickname)
+      const existingNickname = localStorage.getItem('nickname')
+      if (existingNickname !== null) {
+        localStorage.setItem('nickname', nickname)
+      }
     }
   }, [nickname])
 
@@ -125,10 +129,8 @@ export default function GamePage() {
   useEffect(() => {
     if (!socket) return
 
-    const movement: Movement = { ...DEFAULT_MOVEMENT }
-
     const emitMovement = () => {
-      socket.emit(SOCKET_EVENTS.MOVEMENT, movement)
+      socket.emit(SOCKET_EVENTS.MOVEMENT, movementRef.current)
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -148,7 +150,7 @@ export default function GamePage() {
         return
       }
 
-      movement[movementKey] = true
+      movementRef.current[movementKey] = true
       emitMovement()
     }
 
@@ -158,7 +160,7 @@ export default function GamePage() {
       const movementKey = mapKeyToMovement(event.key)
       if (!movementKey) return
 
-      movement[movementKey] = false
+      movementRef.current[movementKey] = false
       emitMovement()
     }
 
@@ -169,6 +171,7 @@ export default function GamePage() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       pressedKeysRef.current.clear()
+      movementRef.current = { ...DEFAULT_MOVEMENT }
       socket.emit(SOCKET_EVENTS.MOVEMENT, DEFAULT_MOVEMENT)
     }
   }, [socket])
@@ -196,21 +199,23 @@ export default function GamePage() {
   return (
     <div className="relative flex h-screen">
       <SharkTankCanvas players={players} bullets={bullets} walls={walls} />
-      <GameHud
-        score={localPlayer?.point ?? 0}
-        health={localPlayer?.health ?? 0}
-        maxHealth={localPlayer?.maxHealth ?? 10}
-        activePlayers={players.length}
-        feed={feed}
-        players={players}
-        showPanel={menuOpen}
-        matchSeconds={matchSeconds}
-        onTogglePanel={() => setMenuOpen((previousValue) => !previousValue)}
-        onSendChat={handleSendChat}
-        chatMessages={chatMessages}
-        spectating={spectating}
-        onToggleSpectate={handleSpectateToggle}
-      />
+      {localPlayer && (
+        <GameHud
+          score={localPlayer.point}
+          health={localPlayer.health}
+          maxHealth={localPlayer.maxHealth}
+          activePlayers={players.length}
+          feed={feed}
+          players={players}
+          showPanel={menuOpen}
+          matchSeconds={matchSeconds}
+          onTogglePanel={() => setMenuOpen((previousValue) => !previousValue)}
+          onSendChat={handleSendChat}
+          chatMessages={chatMessages}
+          spectating={spectating}
+          onToggleSpectate={handleSpectateToggle}
+        />
+      )}
       <MobileControls onMovementChange={handleMobileMovement} onShoot={handleShoot} />
     </div>
   )

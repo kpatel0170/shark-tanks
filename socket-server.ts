@@ -160,6 +160,7 @@ class Player extends GameObject {
   }
 
   damage(io: Server, gameState: GameState) {
+    if (this.spectating) return
     this.health -= 1
 
     if (this.health <= 0) {
@@ -210,6 +211,19 @@ class BotPlayer extends Player {
   cleanup() {
     clearInterval(this.timer)
   }
+
+  override damage(io: Server, gameState: GameState) {
+    super.damage(io, gameState)
+    if (this.health <= 0) {
+      this.cleanup()
+      const { nickname } = this
+      const { walls } = gameState
+      setTimeout(() => {
+        const newBot = new BotPlayer({ nickname }, walls, gameState)
+        gameState.players[newBot.id] = newBot
+      }, 3000)
+    }
+  }
 }
 
 type GameState = {
@@ -244,9 +258,13 @@ function serializeCollection<T extends { id: number; toJSON: () => object }>(col
 }
 
 export function initializeSocket(httpServer: HttpServer) {
+  const corsOrigin = process.env.NODE_ENV === 'production'
+    ? (process.env.NEXT_PUBLIC_APP_URL ?? false)
+    : '*'
+
   const io = new Server(httpServer, {
     path: SOCKET_PATH,
-    cors: { origin: '*' },
+    cors: { origin: corsOrigin },
   })
 
   const gameState: GameState = {
@@ -312,10 +330,12 @@ export function initializeSocket(httpServer: HttpServer) {
     })
 
     socket.on(SOCKET_EVENTS.CHAT_MESSAGE, (payload: ChatPayload) => {
-      io.emit(SOCKET_EVENTS.CHAT_MESSAGE, {
-        nickname: payload.nickname?.slice(0, 10) || 'Player',
-        message: payload.message?.slice(0, 140) || '',
-      })
+      const nickname = (payload?.nickname?.trim() || 'Player').slice(0, 10)
+      const message = (payload?.message ?? '').trim().slice(0, 140)
+
+      if (!message) return
+
+      io.emit(SOCKET_EVENTS.CHAT_MESSAGE, { nickname, message })
     })
 
     socket.on(SOCKET_EVENTS.SPECTATE_MODE, (enabled: boolean) => {
