@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useSocket } from '@/components/socket-provider'
 import { Badge } from '@/components/ui/badge'
@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { SOCKET_EVENTS } from '@/lib/socket'
 
 export default function LobbyPage() {
+  const router = useRouter()
   const socket = useSocket()
   const [nickname, setNickname] = useState('')
   const [room, setRoom] = useState('default')
@@ -32,9 +33,13 @@ export default function LobbyPage() {
     const onUpdatedUsers = (count: number) => setActivePlayers(count)
 
     socket.on(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers)
-    socket.emit(SOCKET_EVENTS.JOIN_LOBBY, { room })
+
+    const joinTimeout = setTimeout(() => {
+      socket.emit(SOCKET_EVENTS.JOIN_LOBBY, { room })
+    }, 300)
 
     return () => {
+      clearTimeout(joinTimeout)
       socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers)
     }
   }, [room, socket])
@@ -44,6 +49,11 @@ export default function LobbyPage() {
 
     localStorage.setItem('nickname', nickname.trim() || 'Player')
     localStorage.setItem('room', room.trim() || 'default')
+  }
+
+  const handleStartGame = () => {
+    handleSaveProfile()
+    router.push('/game')
   }
 
   return (
@@ -80,8 +90,8 @@ export default function LobbyPage() {
             <Button onClick={handleSaveProfile} variant="secondary" className="flex-1">
               Save Profile
             </Button>
-            <Button className="flex-1" asChild onClick={handleSaveProfile}>
-              <Link href="/game">Start Game</Link>
+            <Button className="flex-1" onClick={handleStartGame}>
+              Start Game
             </Button>
           </div>
         </CardContent>
