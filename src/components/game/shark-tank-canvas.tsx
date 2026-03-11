@@ -412,7 +412,7 @@ export function SharkTankCanvas({
   return (
     <div className="h-screen w-full" style={{ touchAction: "none" }}>
       <Canvas
-        shadows
+        shadows={{ type: "PCF" }}
         camera={{
           position: [1000, 300, 1000],
           fov: 100,
