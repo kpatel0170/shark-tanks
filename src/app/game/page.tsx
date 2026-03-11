@@ -6,8 +6,20 @@ import { GameHud } from '@/components/game/game-hud'
 import { MobileControls } from '@/components/game/mobile-controls'
 import { SharkTankCanvas } from '@/components/game/shark-tank-canvas'
 import { useSocket } from '@/components/socket-provider'
-import { DEFAULT_MOVEMENT, type BulletState, type ChatMessage, type Movement, type PlayerState, type WallState } from '@/lib/game-types'
+import { type BulletState, type Movement, type PlayerState, type WallState } from '@/lib/game-types'
 import { SOCKET_EVENTS } from '@/lib/socket'
+
+type ChatMessage = {
+  nickname: string
+  message: string
+}
+
+const DEFAULT_MOVEMENT: Movement = {
+  forward: false,
+  back: false,
+  left: false,
+  right: false,
+}
 
 function mapKeyToMovement(key: string): keyof Movement | null {
   switch (key.toLowerCase()) {

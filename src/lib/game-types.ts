@@ -17,7 +17,6 @@ export type PlayerState = {
   point: number
   nickname: string
   socketId?: string
-  spectating?: boolean
 }
 
 export type BulletState = {
@@ -39,19 +38,7 @@ export type WallState = {
   angle: number
 }
 
-export type ChatMessage = {
-  nickname: string
-  message: string
-}
-
 export type LobbyPlayer = {
   socketId: string
   nickname: string
-}
-
-export const DEFAULT_MOVEMENT: Movement = {
-  forward: false,
-  back: false,
-  left: false,
-  right: false,
 }

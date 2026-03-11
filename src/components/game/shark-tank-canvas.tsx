@@ -20,7 +20,7 @@ function TankModel({ player }: { player: PlayerState }) {
   return (
     <primitive
       object={clonedScene}
-      position={[player.x / 25, 0, player.y / 25]}
+      position={[(player.x + player.width / 2) / 25, 0, (player.y + player.height / 2) / 25]}
       rotation={[0, -player.angle, 0]}
       scale={[2.5, 2.5, 2.5]}
     />
@@ -48,7 +48,7 @@ function WallMesh({ wall }: { wall: WallState }) {
 export function SharkTankCanvas({ players, bullets, walls }: SharkTankCanvasProps) {
   const center = useMemo(() => {
     if (!players.length) return [0, 0, 0] as [number, number, number]
-    const points = players.map((player) => new Vector3(player.x / 25, 0, player.y / 25))
+    const points = players.map((player) => new Vector3((player.x + player.width / 2) / 25, 0, (player.y + player.height / 2) / 25))
     const box = new Box3().setFromPoints(points)
     const middle = box.getCenter(new Vector3())
     return [middle.x, middle.y, middle.z] as [number, number, number]
