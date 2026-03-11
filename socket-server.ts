@@ -25,9 +25,6 @@ const GROUND_MIN = -2500
 const GROUND_MAX = 2500
 const TICK_RATE = 1000 / 20
 
-const sanitizeNickname = (value?: string) => value?.trim().slice(0, 10) || 'Player'
-const sanitizeRoom = (value?: string) => value?.trim() || 'default'
-
 class GameObject {
   public id: number
   public x: number
@@ -163,13 +160,13 @@ class Player extends GameObject {
   }
 
   damage(io: Server, gameState: GameState) {
+    if (this.spectating) return
     this.health -= 1
 
     if (this.health <= 0) {
       if (this.socketId) {
         io.to(this.socketId).emit(SOCKET_EVENTS.DEAD)
       }
-
       delete gameState.players[this.id]
       io.emit(SOCKET_EVENTS.UPDATED_PLAYER_LIST, this.nickname)
     }
@@ -214,13 +211,25 @@ class BotPlayer extends Player {
   cleanup() {
     clearInterval(this.timer)
   }
+
+  override damage(io: Server, gameState: GameState) {
+    super.damage(io, gameState)
+    if (this.health <= 0) {
+      this.cleanup()
+      const { nickname } = this
+      const { walls } = gameState
+      setTimeout(() => {
+        const newBot = new BotPlayer({ nickname }, walls, gameState)
+        gameState.players[newBot.id] = newBot
+      }, 3000)
+    }
+  }
 }
 
 type GameState = {
   players: EntityMap<Player>
   bullets: EntityMap<Bullet>
   walls: EntityMap<Wall>
-  playerNames: string[]
   lobbyRooms: Record<string, LobbyMember[]>
   matchStart: number
 }
@@ -259,16 +268,19 @@ function removeSocketFromRooms(io: Server, gameState: GameState, socketId: strin
 }
 
 export function initializeSocket(httpServer: HttpServer) {
+  const corsOrigin = process.env.NODE_ENV === 'production'
+    ? (process.env.NEXT_PUBLIC_APP_URL ?? false)
+    : '*'
+
   const io = new Server(httpServer, {
     path: SOCKET_PATH,
-    cors: { origin: '*' },
+    cors: { origin: corsOrigin },
   })
 
   const gameState: GameState = {
     players: {},
     bullets: {},
     walls: createWalls(),
-    playerNames: [],
     lobbyRooms: {},
     matchStart: Date.now(),
   }
@@ -282,8 +294,8 @@ export function initializeSocket(httpServer: HttpServer) {
     io.emit(SOCKET_EVENTS.UPDATED_USER_LIST, io.engine.clientsCount)
 
     socket.on(SOCKET_EVENTS.JOIN_LOBBY, (payload?: { room?: string; nickname?: string }) => {
-      const room = sanitizeRoom(payload?.room)
-      const nickname = sanitizeNickname(payload?.nickname)
+      const room = payload?.room?.trim() || 'default'
+      const nickname = payload?.nickname?.trim().slice(0, 10) || 'Player'
 
       socket.join(room)
 
@@ -293,8 +305,9 @@ export function initializeSocket(httpServer: HttpServer) {
       emitRoomPlayers(io, gameState, room)
     })
 
-    socket.on(SOCKET_EVENTS.GAME_START, (config?: { nickname?: string }) => {
-      const nickname = sanitizeNickname(config?.nickname)
+    socket.on(SOCKET_EVENTS.GAME_START, (config?: { nickname?: string; room?: string }) => {
+      const nickname = (config?.nickname ?? 'Player').trim().slice(0, 10) || 'Player'
+      const room = config?.room?.trim() || 'default'
 
       // idempotent start: remove old player for this socket before spawning a new one
       if (player) {
@@ -309,8 +322,8 @@ export function initializeSocket(httpServer: HttpServer) {
         gameState.walls
       )
 
+      socket.join(room)
       gameState.players[player.id] = player
-      gameState.playerNames.push(player.nickname)
       io.emit(SOCKET_EVENTS.JOINING_LIST, [player.nickname])
     })
 
@@ -324,19 +337,13 @@ export function initializeSocket(httpServer: HttpServer) {
       player.shoot(gameState)
     })
 
-    socket.on(SOCKET_EVENTS.CHAT_MESSAGE, (payload: unknown) => {
-      if (!payload || typeof payload !== 'object') return
+    socket.on(SOCKET_EVENTS.CHAT_MESSAGE, (payload: ChatPayload) => {
+      const nickname = (payload?.nickname?.trim() || 'Player').slice(0, 10)
+      const message = (payload?.message ?? '').trim().slice(0, 140)
 
-      const { message: rawMessage, nickname: rawNickname } = payload as ChatPayload
-      if (typeof rawMessage !== 'string') return
-
-      const message = rawMessage.trim().slice(0, 140)
       if (!message) return
 
-      io.emit(SOCKET_EVENTS.CHAT_MESSAGE, {
-        nickname: sanitizeNickname(typeof rawNickname === 'string' ? rawNickname : undefined),
-        message,
-      })
+      io.emit(SOCKET_EVENTS.CHAT_MESSAGE, { nickname, message })
     })
 
     socket.on(SOCKET_EVENTS.SPECTATE_MODE, (enabled: boolean) => {

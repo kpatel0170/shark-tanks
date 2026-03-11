@@ -6,8 +6,12 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
-import type { ChatMessage, PlayerState } from '@/lib/game-types'
-import { cn } from '@/lib/utils'
+import type { PlayerState } from '@/lib/game-types'
+
+type ChatMessage = {
+  nickname: string
+  message: string
+}
 
 type GameHudProps = {
   score: number
@@ -48,7 +52,7 @@ export function GameHud({
 }: GameHudProps) {
   const [chatInput, setChatInput] = useState('')
 
-  const healthPercent = maxHealth > 0 ? Math.max(0, Math.round((health / maxHealth) * 100)) : 0
+  const healthPercent = maxHealth > 0 ? Math.min(100, Math.max(0, Math.round((health / maxHealth) * 100))) : 0
 
   const leaderboard = useMemo(() => {
     return [...players].sort((first, second) => second.point - first.point).slice(0, 5)
@@ -68,7 +72,7 @@ export function GameHud({
         <Button onClick={onTogglePanel}>Game Menu</Button>
         <Badge>Your Score: {score}</Badge>
         <Badge>Match: {formatMatchTime(matchSeconds)}</Badge>
-        <Button variant="secondary" className={cn(spectating && 'bg-amber-600 hover:bg-amber-700')} onClick={onToggleSpectate}>
+        <Button variant="secondary" onClick={onToggleSpectate}>
           {spectating ? 'Stop Spectating' : 'Spectate'}
         </Button>
       </div>
