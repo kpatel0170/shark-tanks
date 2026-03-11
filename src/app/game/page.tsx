@@ -3,6 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SharkTankCanvas } from "@/components/game/shark-tank-canvas";
+import { MobileControls } from "@/components/game/mobile-controls";
+import {
+  GameStats,
+  GameSettings,
+  GameFeed,
+  ControlsInfo,
+  ResponsiveLayout,
+} from "@/components/ui/game-ui";
 import { useSocket } from "@/components/socket-provider";
 import {
   type BulletState,
@@ -41,45 +49,33 @@ function mapKeyToMovement(key: string): keyof Movement | null {
 export default function GamePage() {
   const router = useRouter();
   const socket = useSocket();
-
+  const [score, setScore] = useState<number>(0);
+  const [activePlayers, setActivePlayers] = useState<number>(0);
+  const [feed, setFeed] = useState<string[]>([]);
   const [players, setPlayers] = useState<PlayerState[]>([]);
   const [bullets, setBullets] = useState<BulletState[]>([]);
   const [walls, setWalls] = useState<WallState[]>([]);
-  const [feed, setFeed] = useState<string[]>([]);
-  const [score, setScore] = useState(0);
-  const [activePlayers, setActivePlayers] = useState(0);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [quality, setQuality] = useState<"high" | "medium" | "low">("high");
 
   const pressedKeysRef = useRef<Set<string>>(new Set());
 
-  const nickname = useMemo(() => {
-    if (typeof window === "undefined") return "Player";
-    return (
-      localStorage.getItem("nickname") ??
-      `Player-${Math.floor(Math.random() * 1000)}`
-    );
-  }, []);
+  const localPlayer = useMemo(
+    () => players.find((p) => p.socketId === socket?.id),
+    [players, socket?.id],
+  );
 
   useEffect(() => {
     if (!socket) return;
 
-    socket.emit(SOCKET_EVENTS.GAME_START, { nickname });
-
-    const onState = (
-      playerState: Record<number, PlayerState>,
-      bulletState: Record<number, BulletState>,
-      wallState: Record<number, WallState>,
-    ) => {
-      setPlayers(Object.values(playerState));
-      setBullets(Object.values(bulletState));
-      setWalls(Object.values(wallState));
-
-      // Update local player score
-      const localPlayer = Object.values(playerState).find(
-        (p) => p.socketId === socket.id,
-      );
-      if (localPlayer) {
-        setScore(localPlayer.point);
-      }
+    const onState = (state: {
+      players: PlayerState[];
+      bullets: BulletState[];
+      walls: WallState[];
+    }) => {
+      setPlayers(state.players);
+      setBullets(state.bullets);
+      setWalls(state.walls);
     };
 
     const onJoin = (values: string[]) =>
@@ -87,6 +83,7 @@ export default function GamePage() {
         ...previous.slice(-9),
         `${values.join(", ")} joined the game`,
       ]);
+
     const onDeath = (playerName: string) =>
       setFeed((previous) => [...previous.slice(-9), `${playerName} died`]);
 
@@ -110,7 +107,13 @@ export default function GamePage() {
       socket.off(SOCKET_EVENTS.DEAD, onDead);
       socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUserList);
     };
-  }, [socket, router, nickname]);
+  }, [socket, router]);
+
+  useEffect(() => {
+    if (localPlayer) {
+      setScore(localPlayer.point);
+    }
+  }, [localPlayer]);
 
   useEffect(() => {
     if (!socket) return;
@@ -161,7 +164,7 @@ export default function GamePage() {
   }, [socket]);
 
   return (
-    <div className="relative h-screen">
+    <div className="relative h-screen bg-black">
       <SharkTankCanvas
         players={players}
         bullets={bullets}
@@ -169,31 +172,139 @@ export default function GamePage() {
         localSocketId={socket?.id}
       />
 
-      {/* Legacy-style HUD overlay */}
-      <div className="absolute left-4 top-4 z-50 text-white">
-        <div className="text-lg font-bold">Your Score: {score}</div>
+      {/* Score & Players HUD */}
+      <div className="absolute top-4 left-4 z-50">
+        <Card className="bg-black/80 backdrop-blur-sm border-white/20">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-5 h-5 text-yellow-500" />
+              <div className="text-2xl font-bold text-white">
+                {score.toLocaleString()}
+              </div>
+            </div>
+            <Badge className="bg-slate-700 text-white">
+              <Users className="w-3 h-3 mr-1" />
+              {activePlayers} Players
+            </Badge>
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="absolute right-4 top-4 z-50 rounded bg-black/60 px-3 py-2 text-sm text-white">
-        Active players: {activePlayers}
+      {/* Game Settings Panel */}
+      <div className="absolute top-4 right-4 z-50 hidden md:block">
+        <Card className="bg-black/80 backdrop-blur-sm border-white/20">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
+              <Settings className="w-4 h-4" />
+              Game Settings
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-white">Sound</span>
+              <Button
+                size="default"
+                variant="secondary"
+                onClick={() => setSoundEnabled(!soundEnabled)}
+                className="w-12 h-6 p-0"
+              >
+                {soundEnabled ? (
+                  <Volume2 className="w-4 h-4" />
+                ) : (
+                  <VolumeX className="w-4 h-4" />
+                )}
+              </Button>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-white">Quality</span>
+              <select
+                value={quality}
+                onChange={(e) =>
+                  setQuality(e.target.value as "high" | "medium" | "low")
+                }
+                className="bg-black/60 text-white px-2 py-1 rounded border border-white/20 text-sm"
+              >
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Latest News Feed */}
-      <div className="absolute left-4 bottom-4 z-50 max-w-sm rounded bg-black/60 p-3 text-white">
-        <div className="mb-2 text-sm font-bold">Latest News</div>
-        <div className="max-h-32 space-y-1 overflow-y-auto text-xs">
-          {feed.length ? (
-            feed.map((item, index) => <p key={`${item}-${index}`}>{item}</p>)
-          ) : (
-            <p>No events yet.</p>
-          )}
-        </div>
+      {/* Game Feed */}
+      <div className="absolute left-4 bottom-4 z-50 max-w-sm">
+        <Card className="bg-black/80 backdrop-blur-sm border-white/20">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
+              <Newspaper className="w-4 h-4" />
+              Latest News
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="max-h-32 space-y-1 overflow-y-auto text-xs">
+              {feed.length ? (
+                feed.map((item, index) => (
+                  <p key={`${item}-${index}`} className="text-slate-300">
+                    {item}
+                  </p>
+                ))
+              ) : (
+                <p className="text-slate-500">No events yet.</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Controls hint */}
-      <div className="absolute right-4 bottom-4 z-50 rounded bg-black/60 px-3 py-2 text-xs text-white">
-        Controls: WASD/Arrows to move, Space or X to shoot
+      {/* Mobile Controls Info */}
+      <div className="absolute right-4 bottom-4 z-50 md:hidden">
+        <Card className="bg-black/80 backdrop-blur-sm border-white/20">
+          <CardContent className="p-3">
+            <div className="text-xs space-y-1 text-white">
+              <div className="flex items-center gap-1">
+                <Navigation className="w-3 h-3" />
+                WASD/Arrows - Move
+              </div>
+              <div className="flex items-center gap-1">
+                <Target className="w-3 h-3" />
+                Space/X - Shoot
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
+
+      {/* Desktop Controls Info */}
+      <div className="absolute right-4 bottom-4 z-50 hidden md:block">
+        <Card className="bg-black/80 backdrop-blur-sm border-white/20">
+          <CardContent className="p-3">
+            <div className="text-xs space-y-1 text-white">
+              <div className="flex items-center gap-1">
+                <Navigation className="w-3 h-3" />
+                WASD/Arrows - Move
+              </div>
+              <div className="flex items-center gap-1">
+                <Target className="w-3 h-3" />
+                Space/X - Shoot
+              </div>
+              <div className="flex items-center gap-1">
+                <Gamepad2 className="w-3 h-3" />
+                Mouse - Camera
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Mobile Controls */}
+      <MobileControls
+        onMovementChange={(movement) =>
+          socket?.emit(SOCKET_EVENTS.MOVEMENT, movement)
+        }
+        onShoot={() => socket?.emit(SOCKET_EVENTS.SHOOT)}
+      />
     </div>
   );
 }
