@@ -36,13 +36,12 @@ export default function LobbyPage() {
 
     socket.on(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers)
     socket.on(SOCKET_EVENTS.PLAYERS_UPDATE, onPlayersUpdate)
-    socket.emit(SOCKET_EVENTS.JOIN_LOBBY, { room, nickname })
 
     return () => {
       socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers)
       socket.off(SOCKET_EVENTS.PLAYERS_UPDATE, onPlayersUpdate)
     }
-  }, [nickname, room, socket])
+  }, [socket])
 
   const handleSaveProfile = () => {
     if (typeof window === 'undefined') return
