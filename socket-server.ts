@@ -324,12 +324,17 @@ export function initializeSocket(httpServer: HttpServer) {
       player.shoot(gameState)
     })
 
-    socket.on(SOCKET_EVENTS.CHAT_MESSAGE, (payload: ChatPayload) => {
-      const message = payload.message?.trim().slice(0, 140)
+    socket.on(SOCKET_EVENTS.CHAT_MESSAGE, (payload: unknown) => {
+      if (!payload || typeof payload !== 'object') return
+
+      const { message: rawMessage, nickname: rawNickname } = payload as ChatPayload
+      if (typeof rawMessage !== 'string') return
+
+      const message = rawMessage.trim().slice(0, 140)
       if (!message) return
 
       io.emit(SOCKET_EVENTS.CHAT_MESSAGE, {
-        nickname: sanitizeNickname(payload.nickname),
+        nickname: sanitizeNickname(typeof rawNickname === 'string' ? rawNickname : undefined),
         message,
       })
     })
