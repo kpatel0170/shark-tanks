@@ -1,0 +1,108 @@
+'use client'
+
+import Link from 'next/link'
+import { useEffect, useState } from 'react'
+import { useSocket } from '@/components/socket-provider'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import type { LobbyPlayer } from '@/lib/game-types'
+import { SOCKET_EVENTS } from '@/lib/socket'
+
+export default function LobbyPage() {
+  const socket = useSocket()
+  const [nickname, setNickname] = useState('')
+  const [room, setRoom] = useState('default')
+  const [activePlayers, setActivePlayers] = useState(0)
+  const [roomPlayers, setRoomPlayers] = useState<LobbyPlayer[]>([])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const savedName = localStorage.getItem('nickname')
+    const savedRoom = localStorage.getItem('room')
+
+    if (savedName) setNickname(savedName)
+    if (savedRoom) setRoom(savedRoom)
+  }, [])
+
+  useEffect(() => {
+    if (!socket) return
+
+    const onUpdatedUsers = (count: number) => setActivePlayers(count)
+    const onPlayersUpdate = (players: LobbyPlayer[]) => setRoomPlayers(players)
+
+    socket.on(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers)
+    socket.on(SOCKET_EVENTS.PLAYERS_UPDATE, onPlayersUpdate)
+    socket.emit(SOCKET_EVENTS.JOIN_LOBBY, { room, nickname })
+
+    return () => {
+      socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers)
+      socket.off(SOCKET_EVENTS.PLAYERS_UPDATE, onPlayersUpdate)
+    }
+  }, [nickname, room, socket])
+
+  const handleSaveProfile = () => {
+    if (typeof window === 'undefined') return
+
+    localStorage.setItem('nickname', nickname.trim() || 'Player')
+    localStorage.setItem('room', room.trim() || 'default')
+
+    socket?.emit(SOCKET_EVENTS.JOIN_LOBBY, {
+      room: room.trim() || 'default',
+      nickname: nickname.trim() || 'Player',
+    })
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 p-6 text-white sm:p-8">
+      <Card className="mx-auto max-w-2xl">
+        <CardHeader>
+          <CardTitle>Shark Tanks Multiplayer</CardTitle>
+          <CardDescription>Set your identity, pick a room, then launch into battle.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="nickname">Nickname</Label>
+              <Input
+                id="nickname"
+                value={nickname}
+                maxLength={10}
+                onChange={(event) => setNickname(event.target.value)}
+                placeholder="Your Username"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="room">Room</Label>
+              <Input id="room" value={room} onChange={(event) => setRoom(event.target.value)} placeholder="default" />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg bg-white/10 px-3 py-2 text-sm">
+            <span>Cluster status</span>
+            <Badge>Active players: {activePlayers}</Badge>
+          </div>
+
+          <div className="rounded-lg bg-white/5 p-3">
+            <p className="mb-2 text-sm font-semibold">Players in room: {room}</p>
+            <div className="max-h-24 space-y-1 overflow-y-auto text-sm">
+              {roomPlayers.length ? roomPlayers.map((player) => <p key={player.socketId}>{player.nickname}</p>) : <p>No players in room yet.</p>}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Button onClick={handleSaveProfile} variant="secondary" className="flex-1">
+              Save Profile
+            </Button>
+            <Button className="flex-1" asChild onClick={handleSaveProfile}>
+              <Link href="/game">Start Game</Link>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
