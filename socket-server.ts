@@ -382,8 +382,21 @@ export function initializeSocket(httpServer: HttpServer) {
       })
     })
 
-    io.emit(SOCKET_EVENTS.STATE, serializeCollection(gameState.players), serializeCollection(gameState.bullets), serializeCollection(gameState.walls))
-    io.emit(SOCKET_EVENTS.MATCH_TIMER, Math.floor((Date.now() - gameState.matchStart) / 1000))
+    const serializedPlayers = serializeCollection(gameState.players)
+    const serializedBullets = serializeCollection(gameState.bullets)
+    const serializedWalls = serializeCollection(gameState.walls)
+    const matchTimer = Math.floor((Date.now() - gameState.matchStart) / 1000)
+    const roomIds = Object.keys(gameState.lobbyRooms || {})
+
+    if (roomIds.length === 0) {
+      io.emit(SOCKET_EVENTS.STATE, serializedPlayers, serializedBullets, serializedWalls)
+      io.emit(SOCKET_EVENTS.MATCH_TIMER, matchTimer)
+    } else {
+      roomIds.forEach((roomId) => {
+        io.to(roomId).emit(SOCKET_EVENTS.STATE, serializedPlayers, serializedBullets, serializedWalls)
+        io.to(roomId).emit(SOCKET_EVENTS.MATCH_TIMER, matchTimer)
+      })
+    }
   }, TICK_RATE)
 
   return () => {
