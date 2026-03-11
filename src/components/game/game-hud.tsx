@@ -80,7 +80,7 @@ export function GameHud({
       <div className="absolute right-4 top-4 z-50 rounded bg-black/60 px-3 py-2 text-sm text-white">Active Players: {activePlayers}</div>
 
       {showPanel ? (
-        <aside className="absolute left-0 top-0 z-40 h-screen w-full max-w-sm space-y-4 border-r border-white/20 bg-slate-900/90 p-4 text-white">
+        <aside className="absolute left-0 top-0 z-40 h-screen w-full max-w-sm space-y-4 overflow-y-auto border-r border-white/20 bg-slate-900/90 p-4 text-white">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">Battle Stats</CardTitle>
@@ -131,7 +131,12 @@ export function GameHud({
                 )}
               </div>
               <div className="flex gap-2">
-                <Input value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="Type message" />
+                <Input
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  placeholder="Type message"
+                  onKeyDown={(event) => event.key === 'Enter' && handleSend()}
+                />
                 <Button onClick={handleSend}>Send</Button>
               </div>
             </CardContent>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { useSocket } from '@/components/socket-provider'
 import { Badge } from '@/components/ui/badge'
@@ -8,14 +8,15 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import type { LobbyPlayer } from '@/lib/game-types'
 import { SOCKET_EVENTS } from '@/lib/socket'
 
 export default function LobbyPage() {
-  const router = useRouter()
   const socket = useSocket()
   const [nickname, setNickname] = useState('')
   const [room, setRoom] = useState('default')
   const [activePlayers, setActivePlayers] = useState(0)
+  const [roomPlayers, setRoomPlayers] = useState<LobbyPlayer[]>([])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -31,29 +32,27 @@ export default function LobbyPage() {
     if (!socket) return
 
     const onUpdatedUsers = (count: number) => setActivePlayers(count)
+    const onPlayersUpdate = (players: LobbyPlayer[]) => setRoomPlayers(players)
 
     socket.on(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers)
-
-    const joinTimeout = setTimeout(() => {
-      socket.emit(SOCKET_EVENTS.JOIN_LOBBY, { room })
-    }, 300)
+    socket.on(SOCKET_EVENTS.PLAYERS_UPDATE, onPlayersUpdate)
 
     return () => {
-      clearTimeout(joinTimeout)
       socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers)
+      socket.off(SOCKET_EVENTS.PLAYERS_UPDATE, onPlayersUpdate)
     }
-  }, [room, socket])
+  }, [socket])
 
   const handleSaveProfile = () => {
     if (typeof window === 'undefined') return
 
     localStorage.setItem('nickname', nickname.trim() || 'Player')
     localStorage.setItem('room', room.trim() || 'default')
-  }
 
-  const handleStartGame = () => {
-    handleSaveProfile()
-    router.push('/game')
+    socket?.emit(SOCKET_EVENTS.JOIN_LOBBY, {
+      room: room.trim() || 'default',
+      nickname: nickname.trim() || 'Player',
+    })
   }
 
   return (
@@ -86,12 +85,19 @@ export default function LobbyPage() {
             <Badge>Active players: {activePlayers}</Badge>
           </div>
 
+          <div className="rounded-lg bg-white/5 p-3">
+            <p className="mb-2 text-sm font-semibold">Players in room: {room}</p>
+            <div className="max-h-24 space-y-1 overflow-y-auto text-sm">
+              {roomPlayers.length ? roomPlayers.map((player) => <p key={player.socketId}>{player.nickname}</p>) : <p>No players in room yet.</p>}
+            </div>
+          </div>
+
           <div className="flex flex-col gap-3 sm:flex-row">
             <Button onClick={handleSaveProfile} variant="secondary" className="flex-1">
               Save Profile
             </Button>
-            <Button className="flex-1" onClick={handleStartGame}>
-              Start Game
+            <Button className="flex-1" asChild onClick={handleSaveProfile}>
+              <Link href="/game">Start Game</Link>
             </Button>
           </div>
         </CardContent>

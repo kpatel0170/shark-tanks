@@ -17,7 +17,10 @@ export function SocketProvider({ children }: SocketProviderProps) {
 
   useEffect(() => {
     const socketPath = process.env.NEXT_PUBLIC_SOCKET_PATH ?? SOCKET_PATH
-    const instance = io('/', { path: socketPath })
+    const instance = io('/', {
+      path: socketPath,
+      transports: ['websocket'],
+    })
 
     setSocket(instance)
 
