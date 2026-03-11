@@ -37,8 +37,3 @@ export type WallState = {
   height: number
   angle: number
 }
-
-export type LobbyPlayer = {
-  socketId: string
-  nickname: string
-}

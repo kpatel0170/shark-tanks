@@ -11,15 +11,7 @@ type Movement = {
 
 type EntityMap<T extends { id: number }> = Record<number, T>
 
-type ChatPayload = {
-  nickname?: string
-  message?: string
-}
 
-type LobbyMember = {
-  socketId: string
-  nickname: string
-}
 
 const GROUND_MIN = -2500
 const GROUND_MAX = 2500
@@ -120,7 +112,6 @@ class Player extends GameObject {
   public point: number
   public bullets: EntityMap<Bullet>
   public movement: Movement
-  public spectating: boolean
 
   constructor(props: { socketId?: string; nickname: string }, walls: EntityMap<Wall>) {
     super()
@@ -133,7 +124,6 @@ class Player extends GameObject {
     this.point = 0
     this.bullets = {}
     this.movement = {}
-    this.spectating = false
 
     do {
       this.x = Math.random() * (GROUND_MAX - this.width)
@@ -143,7 +133,7 @@ class Player extends GameObject {
   }
 
   shoot(gameState: GameState) {
-    if (Object.keys(this.bullets).length >= 5 || this.spectating) {
+    if (Object.keys(this.bullets).length >= 5) {
       return
     }
 
@@ -160,7 +150,6 @@ class Player extends GameObject {
   }
 
   damage(io: Server, gameState: GameState) {
-    if (this.spectating) return
     this.health -= 1
 
     if (this.health <= 0) {
@@ -186,7 +175,6 @@ class Player extends GameObject {
       health: this.health,
       maxHealth: this.maxHealth,
       point: this.point,
-      spectating: this.spectating,
     }
   }
 }
@@ -230,7 +218,6 @@ type GameState = {
   players: EntityMap<Player>
   bullets: EntityMap<Bullet>
   walls: EntityMap<Wall>
-  lobbyRooms: Record<string, LobbyMember[]>
   matchStart: number
 }
 
@@ -256,17 +243,6 @@ function serializeCollection<T extends { id: number; toJSON: () => object }>(col
   return Object.fromEntries(Object.values(collection).map((entity) => [entity.id, entity.toJSON()]))
 }
 
-function emitRoomPlayers(io: Server, gameState: GameState, room: string) {
-  io.to(room).emit(SOCKET_EVENTS.PLAYERS_UPDATE, gameState.lobbyRooms[room] ?? [])
-}
-
-function removeSocketFromRooms(io: Server, gameState: GameState, socketId: string) {
-  Object.keys(gameState.lobbyRooms).forEach((room) => {
-    gameState.lobbyRooms[room] = gameState.lobbyRooms[room].filter((member) => member.socketId !== socketId)
-    emitRoomPlayers(io, gameState, room)
-  })
-}
-
 export function initializeSocket(httpServer: HttpServer) {
   const corsOrigin = process.env.NODE_ENV === 'production'
     ? (process.env.NEXT_PUBLIC_APP_URL ?? false)
@@ -281,7 +257,6 @@ export function initializeSocket(httpServer: HttpServer) {
     players: {},
     bullets: {},
     walls: createWalls(),
-    lobbyRooms: {},
     matchStart: Date.now(),
   }
 
@@ -293,21 +268,8 @@ export function initializeSocket(httpServer: HttpServer) {
 
     io.emit(SOCKET_EVENTS.UPDATED_USER_LIST, io.engine.clientsCount)
 
-    socket.on(SOCKET_EVENTS.JOIN_LOBBY, (payload?: { room?: string; nickname?: string }) => {
-      const room = payload?.room?.trim() || 'default'
-      const nickname = payload?.nickname?.trim().slice(0, 10) || 'Player'
-
-      socket.join(room)
-
-      const members = gameState.lobbyRooms[room] ?? []
-      gameState.lobbyRooms[room] = [...members.filter((member) => member.socketId !== socket.id), { socketId: socket.id, nickname }]
-
-      emitRoomPlayers(io, gameState, room)
-    })
-
-    socket.on(SOCKET_EVENTS.GAME_START, (config?: { nickname?: string; room?: string }) => {
+    socket.on(SOCKET_EVENTS.GAME_START, (config?: { nickname?: string }) => {
       const nickname = (config?.nickname ?? 'Player').trim().slice(0, 10) || 'Player'
-      const room = config?.room?.trim() || 'default'
 
       // idempotent start: remove old player for this socket before spawning a new one
       if (player) {
@@ -322,34 +284,18 @@ export function initializeSocket(httpServer: HttpServer) {
         gameState.walls
       )
 
-      socket.join(room)
       gameState.players[player.id] = player
       io.emit(SOCKET_EVENTS.JOINING_LIST, [player.nickname])
     })
 
     socket.on(SOCKET_EVENTS.MOVEMENT, (movement: Movement) => {
-      if (!player || player.health <= 0 || player.spectating) return
+      if (!player || player.health <= 0) return
       player.movement = movement
     })
 
     socket.on(SOCKET_EVENTS.SHOOT, () => {
-      if (!player || player.health <= 0 || player.spectating) return
+      if (!player || player.health <= 0) return
       player.shoot(gameState)
-    })
-
-    socket.on(SOCKET_EVENTS.CHAT_MESSAGE, (payload: ChatPayload) => {
-      const nickname = (payload?.nickname?.trim() || 'Player').slice(0, 10)
-      const message = (payload?.message ?? '').trim().slice(0, 140)
-
-      if (!message) return
-
-      io.emit(SOCKET_EVENTS.CHAT_MESSAGE, { nickname, message })
-    })
-
-    socket.on(SOCKET_EVENTS.SPECTATE_MODE, (enabled: boolean) => {
-      if (!player) return
-      player.spectating = Boolean(enabled)
-      player.movement = {}
     })
 
     socket.on('disconnect', () => {
@@ -358,7 +304,6 @@ export function initializeSocket(httpServer: HttpServer) {
         player = null
       }
 
-      removeSocketFromRooms(io, gameState, socket.id)
       io.emit(SOCKET_EVENTS.UPDATED_USER_LIST, io.engine.clientsCount)
     })
   })
@@ -378,7 +323,7 @@ export function initializeSocket(httpServer: HttpServer) {
       }
 
       Object.values(gameState.players).forEach((target) => {
-        if (target === bullet.player || target.spectating) return
+        if (target === bullet.player) return
 
         if (bullet.intersects(target)) {
           target.damage(io, gameState)
@@ -392,18 +337,8 @@ export function initializeSocket(httpServer: HttpServer) {
     const serializedPlayers = serializeCollection(gameState.players)
     const serializedBullets = serializeCollection(gameState.bullets)
     const serializedWalls = serializeCollection(gameState.walls)
-    const matchTimer = Math.floor((Date.now() - gameState.matchStart) / 1000)
-    const roomIds = Object.keys(gameState.lobbyRooms || {})
 
-    if (roomIds.length === 0) {
-      io.emit(SOCKET_EVENTS.STATE, serializedPlayers, serializedBullets, serializedWalls)
-      io.emit(SOCKET_EVENTS.MATCH_TIMER, matchTimer)
-    } else {
-      roomIds.forEach((roomId) => {
-        io.to(roomId).emit(SOCKET_EVENTS.STATE, serializedPlayers, serializedBullets, serializedWalls)
-        io.to(roomId).emit(SOCKET_EVENTS.MATCH_TIMER, matchTimer)
-      })
-    }
+    io.emit(SOCKET_EVENTS.STATE, serializedPlayers, serializedBullets, serializedWalls)
   }, TICK_RATE)
 
   return () => {
