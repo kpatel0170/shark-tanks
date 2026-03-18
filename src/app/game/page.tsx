@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+
 import { SharkTankCanvas } from "@/components/game/shark-tank-canvas";
 import { MobileControls } from "@/components/game/mobile-controls";
 import {
@@ -52,7 +53,34 @@ export default function GamePage() {
   const [score, setScore] = useState<number>(0);
   const [activePlayers, setActivePlayers] = useState<number>(0);
   const [feed, setFeed] = useState<string[]>([]);
-  const [players, setPlayers] = useState<PlayerState[]>([]);
+  const [players, setPlayers] = useState<PlayerState[]>([
+    {
+      id: 1,
+      socketId: "demo-1",
+      nickname: "TestTank1",
+      x: 500,
+      y: 500,
+      width: 50,
+      height: 50,
+      angle: 0,
+      health: 3,
+      maxHealth: 3,
+      point: 0,
+    },
+    {
+      id: 2,
+      socketId: "demo-2",
+      nickname: "TestTank2",
+      x: 1000,
+      y: 1000,
+      width: 50,
+      height: 50,
+      angle: Math.PI / 4,
+      health: 2,
+      maxHealth: 2,
+      point: 100,
+    },
+  ]);
   const [bullets, setBullets] = useState<BulletState[]>([]);
   const [walls, setWalls] = useState<WallState[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -61,7 +89,10 @@ export default function GamePage() {
   const pressedKeysRef = useRef<Set<string>>(new Set());
 
   const localPlayer = useMemo(
-    () => players?.find((p) => p.socketId === socket?.id) || null,
+    () =>
+      players?.find(
+        (p) => p.socketId === socket?.id || p.socketId === "demo-1",
+      ) || null,
     [players, socket?.id],
   );
 
@@ -73,9 +104,12 @@ export default function GamePage() {
       bullets: BulletState[];
       walls: WallState[];
     }) => {
-      setPlayers(state.players || []);
-      setBullets(state.bullets || []);
-      setWalls(state.walls || []);
+      // Only update if we have real socket data (not demo)
+      if (state.players && state.players.length > 0) {
+        setPlayers(state.players);
+        setBullets(state.bullets || []);
+        setWalls(state.walls || []);
+      }
     };
 
     const onJoin = (values: string[]) =>
@@ -103,12 +137,20 @@ export default function GamePage() {
     socket.on(SOCKET_EVENTS.DEAD, onDead);
     socket.on(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUserList);
 
+    // Emit game-start event when joining
+    if (socket.connected) {
+      const savedName = localStorage.getItem("nickname") || "Player";
+      socket.emit(SOCKET_EVENTS.GAME_START, { nickname: savedName });
+    } else {
+      // If no socket connection, keep demo players visible
+      console.log("Socket not connected, using demo players for testing");
+    }
+
     return () => {
       socket.off(SOCKET_EVENTS.STATE, onState);
       socket.off(SOCKET_EVENTS.JOINING_LIST, onJoin);
       socket.off(SOCKET_EVENTS.UPDATED_PLAYER_LIST, onDeath);
       socket.off(SOCKET_EVENTS.DEAD, onDead);
-      socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUserList);
     };
   }, [socket, router]);
 
