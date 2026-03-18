@@ -2,69 +2,31 @@
 
 import { useMemo, useRef, useEffect, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Text, OrbitControls, useGLTF } from "@react-three/drei";
+import { Text, OrbitControls, useGLTF, useTexture } from "@react-three/drei";
 import { Suspense } from "react";
-import type { Group } from "three";
-import {
-  Vector3,
-  BoxGeometry,
-  MeshStandardMaterial,
-  MeshLambertMaterial,
-  TextureLoader,
-  Box3,
-  Sphere,
-  CubeTextureLoader,
-  RepeatWrapping,
-  PerspectiveCamera,
-  Scene as ThreeScene,
-  WebGLRenderer,
-  DirectionalLight,
-  AmbientLight,
-  Mesh,
-  Group as ThreeGroup,
-  BoxGeometry as ThreeBoxGeometry,
-  SphereGeometry,
-  MeshBasicMaterial,
-} from "three";
+import type { Group, Mesh } from "three";
+import { Vector3, CubeTextureLoader } from "three";
 import type { BulletState, PlayerState, WallState } from "@/lib/game-types";
 
-// Main texture loading for the game
-function useTextures() {
-  const [textures, setTextures] = useState<any>(null);
+// Preload assets on client mount only (moved into component to avoid SSR hook violations)
+
+// Hardcoded wall positions
+const WALLS = [
+  { id: 1, x: 0, y: 2, width: 200, height: 1000, angle: 0 },
+  { id: 2, x: 1000, y: 100, width: 200, height: 1000, angle: 0 },
+  { id: 3, x: 2000, y: 1000, width: 200, height: 1000, angle: 0 },
+  { id: 4, x: -1000, y: -1000, width: 200, height: 1000, angle: 0 },
+  { id: 5, x: -1500, y: 700, width: 200, height: 1000, angle: 0 },
+];
+
+// Loads and attaches the custom skybox as the scene background.
+// CubeTextureLoader takes all 6 faces in one call, so we bypass useLoader
+// (which maps over arrays) and load imperatively via useEffect.
+function Skybox() {
+  const { scene } = useThree();
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const textureLoader = new TextureLoader();
-
-    // Load textures for the game code
-    const playerTexture2 = textureLoader.load("/assets/tank2.png");
-    const playerTexture = textureLoader.load("/assets/front.jpg");
-    const playerTexture1 = textureLoader.load("/assets/bottom.jpg");
-    const playerTexture3 = textureLoader.load("/assets/tires.png");
-    const playerTexture4 = textureLoader.load("/assets/tires2.png");
-    const playerTexture5 = textureLoader.load("/assets/back.jpg");
-    const wallTexture = textureLoader.load("/assets/walls.jpg");
-    const bulletTexture = textureLoader.load("/assets/bullets.jpg");
-
-    // Create game materials
-    const bulletMaterial = new MeshLambertMaterial({ map: bulletTexture });
-    const wallMaterial = new MeshLambertMaterial({ map: wallTexture });
-    const playerMaterial = [
-      new MeshLambertMaterial({ map: playerTexture1, color: 0x404040 }),
-      new MeshLambertMaterial({ map: playerTexture5, color: 0x404040 }),
-      new MeshLambertMaterial({ map: playerTexture2 }),
-      new MeshLambertMaterial({ map: playerTexture, color: 0x404040 }),
-      new MeshLambertMaterial({ map: playerTexture3, color: 0x404040 }),
-      new MeshLambertMaterial({ map: playerTexture4, color: 0x404040 }),
-    ];
-
-    const textMaterial = new MeshBasicMaterial({ color: 0x85bb65, side: 2 });
-    const nicknameMaterial = new MeshBasicMaterial({ color: "black", side: 2 });
-
-    // Load skybox for the game
-    const loader_map = new CubeTextureLoader();
-    const skyboxTexture = loader_map.load([
+    const texture = new CubeTextureLoader().load([
       "/assets/nx.png",
       "/assets/px.png",
       "/assets/py1.png",
@@ -72,38 +34,15 @@ function useTextures() {
       "/assets/nz.png",
       "/assets/pz.png",
     ]);
+    scene.background = texture;
+    return () => {
+      scene.background = null;
+    };
+  }, [scene]);
 
-    setTextures({
-      bulletMaterial,
-      wallMaterial,
-      playerMaterial,
-      textMaterial,
-      nicknameMaterial,
-      skyboxTexture,
-    });
-  }, []);
-
-  return textures;
+  return null;
 }
 
-// Main wall setup - hardcoded positions
-function useWalls() {
-  return useMemo(
-    () => [
-      { id: 1, x: 0, y: 2, width: 200, height: 1000, angle: 0 },
-      { id: 2, x: 1000, y: 100, width: 200, height: 1000, angle: 0 },
-      { id: 3, x: 2000, y: 1000, width: 200, height: 1000, angle: 0 },
-      { id: 4, x: -1000, y: -1000, width: 200, height: 1000, angle: 0 },
-      { id: 5, x: -1500, y: 700, width: 200, height: 1000, angle: 0 },
-    ],
-    [],
-  );
-}
-
-// Preload the GLTF model
-useGLTF.preload("/models/tank4.glb");
-
-// Enhanced tank model using GLTF - no fallback
 function EnhancedTankModel({
   player,
   isLocalPlayer,
@@ -112,37 +51,23 @@ function EnhancedTankModel({
   isLocalPlayer: boolean;
 }) {
   const meshRef = useRef<Group>(null);
-
-  // Load GLTF model according to official docs
-  const gltf = useGLTF("/models/tank4.glb");
+  const { scene: gltfScene } = useGLTF("/models/tank4.glb");
+  // Clone once per player instance, not on every render
+  const clonedScene = useMemo(() => gltfScene.clone(), [gltfScene]);
 
   useFrame(() => {
-    if (meshRef.current) {
-      // Update position and rotation exactly like legacy
-      meshRef.current.position.set(
-        player.x + player.width / 2,
-        player.height / 2, // Raise tank above ground
-        player.y + player.height / 2,
-      );
-      meshRef.current.rotation.y = -player.angle;
-    }
+    if (!meshRef.current) return;
+    meshRef.current.position.set(
+      player.x + player.width / 2,
+      player.height / 2,
+      player.y + player.height / 2,
+    );
+    meshRef.current.rotation.y = -player.angle;
   });
-
-  // Only render if GLTF is loaded
-  if (!gltf?.scene) {
-    return null; // Don't render anything until GLTF loads
-  }
 
   return (
     <group ref={meshRef}>
-      {/* Tank GLB model - make it much larger and more visible */}
-      <primitive
-        object={gltf.scene.clone()}
-        scale={[16, 16, 16]} // Much larger scale for better visibility
-        position={[0, 0, 0]}
-      />
-
-      {/* Nickname text - positioned above tank */}
+      <primitive object={clonedScene} scale={[16, 16, 16]} />
       <Text
         position={[0, 120, 0]}
         rotation={[0, Math.PI / 2, 0]}
@@ -155,8 +80,6 @@ function EnhancedTankModel({
       >
         {player.nickname}
       </Text>
-
-      {/* Health indicator */}
       <Text
         position={[0, 100, 0]}
         rotation={[0, Math.PI / 2, 0]}
@@ -173,87 +96,27 @@ function EnhancedTankModel({
   );
 }
 
-// Main player mesh
-function PlayerMesh({
-  player,
-  textures,
-  isLocalPlayer,
-}: {
-  player: PlayerState;
-  textures: any;
-  isLocalPlayer: boolean;
-}) {
-  const meshRef = useRef<Group>(null);
-  const healthMeshRef = useRef<Mesh>(null);
-
-  useFrame(() => {
-    if (meshRef.current) {
-      // Update position and rotation exactly like legacy
-      meshRef.current.position.set(
-        player.x + player.width / 2,
-        player.width / 2,
-        player.y + player.height / 2,
-      );
-      meshRef.current.rotation.y = -player.angle;
-
-      // Don't control camera directly - let OrbitControls handle it
-      // Camera will follow through the CameraController component
-    }
-  });
-
-  if (!textures) return null;
-
+function WallMesh({ wall }: { wall: (typeof WALLS)[0] }) {
+  const wallTex = useTexture("/assets/walls.jpg");
   return (
-    <group ref={meshRef}>
-      {/* Tank body - simple box */}
-      <mesh castShadow receiveShadow>
-        <boxGeometry args={[player.width, player.width, player.height]} />
-        <meshLambertMaterial map={textures.playerMaterial[2].map} />
-      </mesh>
-
-      {/* Nickname text - simplified version */}
-      <Text
-        position={[0, 70, 0]}
-        rotation={[0, Math.PI / 2, 0]}
-        fontSize={10}
-        color="black"
-        anchorX="center"
-        anchorY="middle"
-      >
-        {player.nickname}
-      </Text>
-
-      {/* Health indicator */}
-      <Text
-        position={[0, 50, 0]}
-        rotation={[0, Math.PI / 2, 0]}
-        fontSize={10}
-        color="#85bb65"
-        anchorX="center"
-        anchorY="middle"
-      >
-        {"$".repeat(player.health)}
-      </Text>
-    </group>
+    <mesh
+      position={[wall.x + wall.width / 2, 50, wall.y + wall.height / 2]}
+      castShadow
+    >
+      <boxGeometry args={[wall.width, 200, wall.height]} />
+      <meshLambertMaterial map={wallTex} />
+    </mesh>
   );
 }
 
-// Main bullet mesh with better visuals
-function BulletMesh({
-  bullet,
-  textures,
-}: {
-  bullet: BulletState;
-  textures: any;
-}) {
+function BulletMesh({ bullet }: { bullet: BulletState }) {
   const meshRef = useRef<Mesh>(null);
 
   useFrame(() => {
-    if (meshRef.current) {
-      meshRef.current.position.set(bullet.x, 25, bullet.y);
-      meshRef.current.rotation.x += 0.1;
-      meshRef.current.rotation.y += 0.1;
-    }
+    if (!meshRef.current) return;
+    meshRef.current.position.set(bullet.x, 25, bullet.y);
+    meshRef.current.rotation.x += 0.1;
+    meshRef.current.rotation.y += 0.1;
   });
 
   return (
@@ -266,7 +129,6 @@ function BulletMesh({
         metalness={0.8}
         roughness={0.2}
       />
-      {/* Add glow effect */}
       <pointLight
         position={[0, 0, 0]}
         color={bullet.playerId === 0 ? "#ff6b6b" : "#4ecdc4"}
@@ -277,109 +139,96 @@ function BulletMesh({
   );
 }
 
-// Main wall mesh
-function WallMesh({ wall, textures }: { wall: WallState; textures: any }) {
-  if (!textures) return null;
+// Persistent vector — avoids allocating a new Vector3 every frame
+const _cameraTarget = new Vector3();
 
-  return (
-    <mesh
-      position={[wall.x + wall.width / 2, 50, wall.y + wall.height / 2]}
-      castShadow
-    >
-      <boxGeometry args={[wall.width, 200, wall.height]} />
-      <primitive object={textures.wallMaterial} />
-    </mesh>
-  );
-}
-
-// Camera controller that works with OrbitControls
 function CameraController({ localPlayer }: { localPlayer?: PlayerState }) {
   const { camera } = useThree();
+  const cameraPos = useRef(new Vector3(1000, 300, 1000));
 
   useFrame(() => {
     if (!localPlayer) return;
 
-    // Calculate desired camera position behind player
     const playerX = localPlayer.x + localPlayer.width / 2;
     const playerZ = localPlayer.y + localPlayer.height / 2;
-    const angle = localPlayer.angle;
+    const { angle } = localPlayer;
 
-    // Main camera positioning
-    const targetX = playerX - 150 * Math.cos(angle);
-    const targetY = 200;
-    const targetZ = playerZ - 150 * Math.sin(angle);
+    _cameraTarget.set(
+      playerX - 150 * Math.cos(angle),
+      200,
+      playerZ - 150 * Math.sin(angle),
+    );
 
-    // Smoothly interpolate camera position
-    camera.position.lerp(new Vector3(targetX, targetY, targetZ), 0.05);
-
-    // Look at player position
-    camera.lookAt(playerX, targetY - 150, playerZ);
+    cameraPos.current.lerp(_cameraTarget, 0.05);
+    camera.position.copy(cameraPos.current);
+    camera.lookAt(playerX, 50, playerZ);
   });
 
   return null;
 }
 
-// Main scene setup
-function Scene({
-  children,
-  textures,
+function GameScene({
+  players,
+  bullets,
   localPlayer,
+  localSocketId,
 }: {
-  children: React.ReactNode;
-  textures: any;
+  players: PlayerState[];
+  bullets: BulletState[];
   localPlayer?: PlayerState;
+  localSocketId?: string;
 }) {
-  const { scene, camera } = useThree() as {
-    scene: ThreeScene;
-    camera: PerspectiveCamera;
-  };
+  return (
+    <>
+      {/* Declarative lighting — no useEffect / manual scene manipulation */}
+      <ambientLight color={0x808080} intensity={0.6} />
+      <directionalLight
+        position={[-100, 300, -100]}
+        intensity={1.2}
+        castShadow
+        shadow-camera-left={-2000}
+        shadow-camera-right={2000}
+        shadow-camera-top={2000}
+        shadow-camera-bottom={-2000}
+        shadow-camera-far={2000}
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+      />
+      <directionalLight
+        position={[500, 200, 500]}
+        intensity={0.3}
+        color={0xb3d4ff}
+      />
 
-  useEffect(() => {
-    if (!textures || !scene) return;
+      <Skybox />
 
-    // Set background
-    scene.background = textures.skyboxTexture;
+      {/* Floor */}
+      <mesh receiveShadow position={[0, -0.5, 0]}>
+        <boxGeometry args={[5000, 1, 5000]} />
+        <meshStandardMaterial color={0x404040} />
+      </mesh>
 
-    // Set up floor
-    const floorGeometry = new BoxGeometry(5000, 1, 5000);
-    const floorMaterial = new MeshStandardMaterial({ color: 0x404040 });
-    const floorMesh = new Mesh(floorGeometry, floorMaterial);
-    floorMesh.receiveShadow = true;
-    floorMesh.position.y = -0.5;
-    scene.add(floorMesh);
+      <CameraController localPlayer={localPlayer} />
 
-    // Set up enhanced lighting
-    const mainLight = new DirectionalLight(0xffffff, 1.2);
-    mainLight.position.set(-100, 300, -100);
-    mainLight.castShadow = true;
-    mainLight.shadow.camera.left = -2000;
-    mainLight.shadow.camera.right = 2000;
-    mainLight.shadow.camera.top = 2000;
-    mainLight.shadow.camera.bottom = -2000;
-    mainLight.shadow.camera.far = 2000;
-    mainLight.shadow.mapSize.width = 2048;
-    mainLight.shadow.mapSize.height = 2048;
-    scene.add(mainLight);
+      {WALLS.map((wall) => (
+        <WallMesh key={wall.id} wall={wall} />
+      ))}
 
-    const fillLight = new DirectionalLight(0xb3d4ff, 0.3);
-    fillLight.position.set(500, 200, 500);
-    scene.add(fillLight);
+      {players.map((player) => (
+        <EnhancedTankModel
+          key={player.id}
+          player={player}
+          isLocalPlayer={player.socketId === localSocketId}
+        />
+      ))}
 
-    const ambient = new AmbientLight(0x808080, 0.6);
-    scene.add(ambient);
-
-    return () => {
-      scene.remove(floorMesh);
-      scene.remove(mainLight);
-      scene.remove(fillLight);
-      scene.remove(ambient);
-    };
-  }, [textures, scene]);
-
-  return <>{children}</>;
+      {bullets.map((bullet) => (
+        <BulletMesh key={bullet.id} bullet={bullet} />
+      ))}
+    </>
+  );
 }
 
-// Main game component
 type SharkTankCanvasProps = {
   players: PlayerState[];
   bullets: BulletState[];
@@ -390,29 +239,38 @@ type SharkTankCanvasProps = {
 export function SharkTankCanvas({
   players,
   bullets,
-  walls,
   localSocketId,
 }: SharkTankCanvasProps) {
-  const textures = useTextures();
-  const gameWalls = useWalls();
+  const [isClient, setIsClient] = useState(false);
 
+  // Call useMemo before conditional to maintain hook order
   const localPlayer = useMemo(
     () => players.find((p) => p.socketId === localSocketId),
     [players, localSocketId],
   );
 
-  if (!textures) {
-    return (
-      <div className="h-screen w-full bg-blue-900 flex items-center justify-center">
-        <div className="text-white text-xl">Loading game assets...</div>
-      </div>
-    );
+  useEffect(() => {
+    setIsClient(true);
+    // Preload assets on client mount
+    useGLTF.preload("/models/tank4.glb");
+    useTexture.preload("/assets/walls.jpg");
+    useTexture.preload("/assets/bullets.jpg");
+    useTexture.preload("/assets/tank2.png");
+    useTexture.preload("/assets/front.jpg");
+    useTexture.preload("/assets/bottom.jpg");
+    useTexture.preload("/assets/tires.png");
+    useTexture.preload("/assets/tires2.png");
+    useTexture.preload("/assets/back.jpg");
+  }, []);
+
+  if (!isClient) {
+    return <div className="h-screen w-full bg-[#001133]" />;
   }
 
   return (
     <div className="h-screen w-full" style={{ touchAction: "none" }}>
       <Canvas
-        shadows={{ type: "PCF" }}
+        shadows
         camera={{
           position: [1000, 300, 1000],
           fov: 100,
@@ -421,46 +279,30 @@ export function SharkTankCanvas({
         }}
         gl={{ antialias: true }}
       >
+        <color attach="background" args={["#001133"]} />
+
         <Suspense fallback={null}>
-          <Scene textures={textures} localPlayer={localPlayer}>
-            {/* Camera controller for following player */}
-            <CameraController localPlayer={localPlayer} />
-
-            {/* Game walls - hardcoded positions */}
-            {gameWalls.map((wall) => (
-              <WallMesh key={wall.id} wall={wall} textures={textures} />
-            ))}
-
-            {/* Players - Enhanced with GLTF models */}
-            {players.map((player) => (
-              <EnhancedTankModel
-                key={player.id}
-                player={player}
-                isLocalPlayer={player.socketId === localSocketId}
-              />
-            ))}
-
-            {/* Bullets */}
-            {bullets.map((bullet) => (
-              <BulletMesh key={bullet.id} bullet={bullet} textures={textures} />
-            ))}
-
-            {/* OrbitControls for manual camera control */}
-            <OrbitControls
-              enablePan={true}
-              enableZoom={true}
-              enableRotate={true}
-              minDistance={100}
-              maxDistance={2000}
-              maxPolarAngle={Math.PI}
-              enableDamping={true}
-              dampingFactor={0.05}
-              rotateSpeed={0.5}
-              zoomSpeed={0.8}
-              panSpeed={0.8}
-            />
-          </Scene>
+          <GameScene
+            players={players}
+            bullets={bullets}
+            localPlayer={localPlayer}
+            localSocketId={localSocketId}
+          />
         </Suspense>
+
+        <OrbitControls
+          enablePan
+          enableZoom
+          enableRotate
+          minDistance={100}
+          maxDistance={2000}
+          maxPolarAngle={Math.PI}
+          enableDamping
+          dampingFactor={0.05}
+          rotateSpeed={0.5}
+          zoomSpeed={0.8}
+          panSpeed={0.8}
+        />
       </Canvas>
     </div>
   );
