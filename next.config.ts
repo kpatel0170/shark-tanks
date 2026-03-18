@@ -1,15 +1,14 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["socket.io", "@react-three/fiber"],
+  serverExternalPackages: ['ws', '@react-three/fiber'],
   webpack: (config: any) => {
     config.resolve.alias = {
       ...config.resolve.alias,
-      three: require.resolve("three"),
-    };
-    return config;
+      three: require.resolve('three'),
+    }
+    return config
   },
-  turbopack: {},
-};
+}
 
-export default nextConfig;
+export default nextConfig

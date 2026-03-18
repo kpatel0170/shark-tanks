@@ -35,7 +35,6 @@ export default function LobbyPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-
     const savedName = localStorage.getItem("nickname");
     if (savedName) setNickname(savedName);
   }, []);
@@ -43,13 +42,10 @@ export default function LobbyPage() {
   useEffect(() => {
     if (!socket) return;
 
-    const onUpdatedUsers = (count: number) => setActivePlayers(count);
-
+    const onUpdatedUsers = ({ count = 0 }: { count?: number }) => setActivePlayers(count);
     socket.on(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers);
 
-    return () => {
-      socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers);
-    };
+    return () => socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUsers);
   }, [socket]);
 
   const handleGameStart = () => {
@@ -60,7 +56,6 @@ export default function LobbyPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 p-4 sm:p-6 lg:p-8 flex items-center justify-center relative overflow-hidden">
-      {/* Animated Background Elements */}
       <div className="absolute inset-0 overflow-hidden">
         <div className="absolute top-10 left-10 w-20 h-20 bg-yellow-500/20 rounded-full blur-xl animate-pulse"></div>
         <div className="absolute top-32 right-20 w-16 h-16 bg-blue-500/20 rounded-full blur-lg animate-pulse delay-1000"></div>
@@ -71,7 +66,6 @@ export default function LobbyPage() {
       <div className="w-full max-w-lg mx-auto relative z-10">
         <Card className="border-white/20 bg-black/30 backdrop-blur-sm shadow-2xl">
           <CardHeader className="text-center space-y-4 pb-8">
-            {/* Logo with Animation */}
             <div className="flex justify-center items-center gap-3">
               <div className="relative">
                 <Swords className="w-8 h-8 text-red-500 animate-pulse" />
@@ -92,7 +86,6 @@ export default function LobbyPage() {
               <Flame className="w-5 h-5 text-orange-500" />
             </CardDescription>
 
-            {/* Status Badges */}
             <div className="flex justify-center gap-2 flex-wrap">
               <Badge className="bg-green-600/80 text-white border-green-400/50 flex items-center gap-1">
                 <Wifi className="w-3 h-3" />
@@ -123,7 +116,7 @@ export default function LobbyPage() {
                   id="nickname"
                   type="text"
                   value={nickname}
-                  onChange={(e) => setNickname(e.target.value)}
+                  onChange={e => setNickname(e.target.value)}
                   placeholder="Enter nickname"
                   maxLength={10}
                   className="bg-slate-900/80 border-white/20 text-white placeholder:text-slate-400 h-12 text-lg font-semibold focus:ring-2 focus:ring-blue-500 transition-all"
@@ -162,29 +155,22 @@ export default function LobbyPage() {
             </div>
 
             <div className="text-xs text-slate-400 space-y-2 pt-4 border-t border-white/10">
-              <div className="flex items-center justify-between">
-                <p className="flex items-center gap-1">
-                  <Zap className="w-3 h-3 text-yellow-500" />
-                  3D multiplayer game - give it a moment to load
-                </p>
-              </div>
-              <div className="flex items-center justify-between">
-                <p className="flex items-center gap-1">
-                  <Target className="w-3 h-3 text-green-500" />
-                  Mobile: play in landscape mode for best experience
-                </p>
-              </div>
-              <div className="flex items-center justify-between">
-                <p className="flex items-center gap-1">
-                  <Shield className="w-3 h-3 text-blue-500" />
-                  WASD/Arrows to move, Space/X to shoot
-                </p>
-              </div>
+              <p className="flex items-center gap-1">
+                <Zap className="w-3 h-3 text-yellow-500" />
+                3D multiplayer game - give it a moment to load
+              </p>
+              <p className="flex items-center gap-1">
+                <Target className="w-3 h-3 text-green-500" />
+                Mobile: play in landscape mode for best experience
+              </p>
+              <p className="flex items-center gap-1">
+                <Shield className="w-3 h-3 text-blue-500" />
+                WASD/Arrows to move, Space/X to shoot
+              </p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Footer */}
         <div className="mt-6 text-center">
           <div className="flex items-center justify-center gap-2 text-xs text-slate-500">
             <Sparkles className="w-3 h-3" />
