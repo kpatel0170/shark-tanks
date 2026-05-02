@@ -5,196 +5,159 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SharkTankCanvas } from "@/components/game/shark-tank-canvas";
 import { MobileControls } from "@/components/game/mobile-controls";
-import {
-  GameStats,
-  GameSettings,
-  GameFeed,
-  ControlsInfo,
-  ResponsiveLayout,
-} from "@/components/ui/game-ui";
+import { GameStats, GameSettings, GameFeed, ControlsInfo } from "@/components/ui/game-ui";
 import { useSocket } from "@/components/socket-provider";
-import {
-  type BulletState,
-  type Movement,
-  type PlayerState,
-  type WallState,
-} from "@/lib/game-types";
+import { type BulletState, type Movement, type PlayerState } from "@/lib/game-types";
 import { SOCKET_EVENTS } from "@/lib/socket";
 
-const DEFAULT_MOVEMENT: Movement = {
-  forward: false,
-  back: false,
-  left: false,
-  right: false,
-};
+const DEFAULT_MOVEMENT: Movement = { forward: false, back: false, left: false, right: false };
 
 function mapKeyToMovement(key: string): keyof Movement | null {
   switch (key.toLowerCase()) {
-    case "w":
-    case "arrowup":
-      return "forward";
-    case "s":
-    case "arrowdown":
-      return "back";
-    case "a":
-    case "arrowleft":
-      return "left";
-    case "d":
-    case "arrowright":
-      return "right";
-    default:
-      return null;
+    case "w": case "arrowup":    return "forward";
+    case "s": case "arrowdown":  return "back";
+    case "a": case "arrowleft":  return "left";
+    case "d": case "arrowright": return "right";
+    default: return null;
   }
 }
 
 export default function GamePage() {
   const router = useRouter();
   const socket = useSocket();
-  const [score, setScore] = useState<number>(0);
-  const [activePlayers, setActivePlayers] = useState<number>(0);
-  const [feed, setFeed] = useState<string[]>([]);
-  const [players, setPlayers] = useState<PlayerState[]>([]);
-  const [bullets, setBullets] = useState<BulletState[]>([]);
-  const [walls, setWalls] = useState<WallState[]>([]);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [quality, setQuality] = useState<"high" | "medium" | "low">("high");
 
-  const pressedKeysRef = useRef<Set<string>>(new Set());
+  const [players, setPlayers]         = useState<PlayerState[]>([]);
+  const [bullets, setBullets]         = useState<BulletState[]>([]);
+  const [activePlayers, setActivePlayers] = useState(0);
+  const [feed, setFeed]               = useState<string[]>([]);
+  const [quality, setQuality]         = useState<"high" | "medium" | "low">("high");
+
+  const pressedKeys = useRef<Set<string>>(new Set());
 
   const localPlayer = useMemo(
-    () => players.find(p => p.socketId === socket?.id) ?? null,
+    () => players.find((p) => p.socketId === socket?.id) ?? null,
     [players, socket?.id],
   );
 
+  // Socket event handlers
   useEffect(() => {
     if (!socket) return;
 
     const onState = (payload: Record<string, unknown>) => {
-      const { players, bullets, walls } = payload as {
+      const { players: p, bullets: b } = payload as {
         players: PlayerState[];
         bullets: BulletState[];
-        walls: WallState[];
       };
-      if (players?.length > 0) {
-        setPlayers(players);
-        setBullets(bullets ?? []);
-        setWalls(walls ?? []);
+      if (p?.length > 0) {
+        setPlayers(p);
+        setBullets(b ?? []);
       }
     };
 
-    const onJoin = ({ nicknames = [] }: { nicknames?: string[] }) =>
-      setFeed(prev => [...prev.slice(-9), `${nicknames.join(", ") || "Someone"} joined the game`]);
+    const pushFeed = (msg: string) =>
+      setFeed((prev) => [...prev.slice(-9), msg]);
 
-    const onDeath = ({ nickname }: { nickname?: string }) =>
-      setFeed(prev => [...prev.slice(-9), `${nickname || "Someone"} died`]);
+    const onJoin    = ({ nicknames = [] }: { nicknames?: string[] }) =>
+      pushFeed(`${nicknames.join(", ") || "Someone"} joined`);
 
-    const onDead = () => {
-      setFeed(prev => [...prev.slice(-9), "You died"]);
-      router.push("/lobby");
-    };
+    const onDeath   = ({ nickname }: { nickname?: string }) =>
+      pushFeed(`${nickname || "Someone"} was destroyed`);
 
-    const onUpdatedUserList = ({ count = 0 }: { count?: number }) =>
-      setActivePlayers(count);
+    const onDead    = () => { pushFeed("You were destroyed"); router.push("/lobby"); };
 
-    socket.on(SOCKET_EVENTS.STATE, onState);
-    socket.on(SOCKET_EVENTS.JOINING_LIST, onJoin);
+    const onCount   = ({ count = 0 }: { count?: number }) => setActivePlayers(count);
+
+    socket.on(SOCKET_EVENTS.STATE,               onState);
+    socket.on(SOCKET_EVENTS.JOINING_LIST,        onJoin);
     socket.on(SOCKET_EVENTS.UPDATED_PLAYER_LIST, onDeath);
-    socket.on(SOCKET_EVENTS.DEAD, onDead);
-    socket.on(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUserList);
+    socket.on(SOCKET_EVENTS.DEAD,                onDead);
+    socket.on(SOCKET_EVENTS.UPDATED_USER_LIST,   onCount);
 
-    const savedName = localStorage.getItem("nickname") || "Player";
-    socket.emit(SOCKET_EVENTS.GAME_START, { nickname: savedName });
+    const nickname = localStorage.getItem("nickname") || "Player";
+    socket.emit(SOCKET_EVENTS.GAME_START, { nickname });
 
     return () => {
-      socket.off(SOCKET_EVENTS.STATE, onState);
-      socket.off(SOCKET_EVENTS.JOINING_LIST, onJoin);
+      socket.off(SOCKET_EVENTS.STATE,               onState);
+      socket.off(SOCKET_EVENTS.JOINING_LIST,        onJoin);
       socket.off(SOCKET_EVENTS.UPDATED_PLAYER_LIST, onDeath);
-      socket.off(SOCKET_EVENTS.DEAD, onDead);
-      socket.off(SOCKET_EVENTS.UPDATED_USER_LIST, onUpdatedUserList);
+      socket.off(SOCKET_EVENTS.DEAD,                onDead);
+      socket.off(SOCKET_EVENTS.UPDATED_USER_LIST,   onCount);
     };
   }, [socket, router]);
 
-  useEffect(() => {
-    if (localPlayer) setScore(localPlayer.point);
-  }, [localPlayer]);
-
+  // Keyboard input
   useEffect(() => {
     if (!socket) return;
 
     const movement: Movement = { ...DEFAULT_MOVEMENT };
+    const emit = () => socket.emit(SOCKET_EVENTS.MOVEMENT, movement);
 
-    const emitMovement = () => socket.emit(SOCKET_EVENTS.MOVEMENT, movement);
+    const onKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      if (pressedKeys.current.has(key)) return;
+      pressedKeys.current.add(key);
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!event?.key) return;
-      const key = event.key.toLowerCase();
-      if (pressedKeysRef.current.has(key)) return;
-      pressedKeysRef.current.add(key);
-
-      const dir = mapKeyToMovement(event.key);
-      if (!dir) {
-        if (event.code === "Space" || key === "x") socket.emit(SOCKET_EVENTS.SHOOT);
-        return;
-      }
-      movement[dir] = true;
-      emitMovement();
+      const dir = mapKeyToMovement(e.key);
+      if (dir) { movement[dir] = true; emit(); return; }
+      if (e.code === "Space" || key === "x") socket.emit(SOCKET_EVENTS.SHOOT);
     };
 
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (!event?.key) return;
-      pressedKeysRef.current.delete(event.key.toLowerCase());
-      const dir = mapKeyToMovement(event.key);
-      if (!dir) return;
-      movement[dir] = false;
-      emitMovement();
+    const onKeyUp = (e: KeyboardEvent) => {
+      pressedKeys.current.delete(e.key.toLowerCase());
+      const dir = mapKeyToMovement(e.key);
+      if (dir) { movement[dir] = false; emit(); }
     };
 
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keyup",   onKeyUp);
 
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      pressedKeysRef.current.clear();
+      window.removeEventListener("keyup",   onKeyUp);
+      pressedKeys.current.clear();
       socket.emit(SOCKET_EVENTS.MOVEMENT, DEFAULT_MOVEMENT);
     };
   }, [socket]);
 
   return (
-    <ResponsiveLayout className="relative h-screen bg-black">
+    <div className="relative h-screen bg-black overflow-hidden">
       <SharkTankCanvas
         players={players}
         bullets={bullets}
-        walls={walls}
         localSocketId={socket?.id}
+        quality={quality}
       />
 
+      {/* Top-left: score + player count + health */}
       <div className="absolute top-4 left-4 z-50">
-        <GameStats score={score} activePlayers={activePlayers} isMobile={false} />
-      </div>
-
-      <div className="absolute top-4 right-4 z-50 hidden md:block">
-        <GameSettings
-          soundEnabled={soundEnabled}
-          quality={quality}
-          onSoundToggle={() => setSoundEnabled(!soundEnabled)}
-          onQualityChange={setQuality}
-          isMobile={false}
+        <GameStats
+          score={localPlayer?.point ?? 0}
+          activePlayers={activePlayers}
+          health={localPlayer?.health ?? 0}
+          maxHealth={localPlayer?.maxHealth ?? 0}
         />
       </div>
 
-      <div className="absolute left-4 bottom-4 z-50">
-        <GameFeed feed={feed} isMobile={false} />
+      {/* Top-right: quality (desktop only) */}
+      <div className="absolute top-4 right-4 z-50 hidden md:block">
+        <GameSettings quality={quality} onQualityChange={setQuality} />
       </div>
 
-      <div className="absolute right-4 bottom-4 z-50">
-        <ControlsInfo isMobile={false} />
+      {/* Bottom-left: event feed */}
+      <div className="absolute bottom-4 left-4 z-50 hidden sm:block">
+        <GameFeed feed={feed} />
       </div>
 
+      {/* Bottom-right: controls hint (desktop only) */}
+      <div className="absolute bottom-4 right-4 z-50 hidden md:block">
+        <ControlsInfo />
+      </div>
+
+      {/* Mobile: d-pad + fire + bottom bar */}
       <MobileControls
-        onMovementChange={movement => socket?.emit(SOCKET_EVENTS.MOVEMENT, movement)}
+        onMovementChange={(m) => socket?.emit(SOCKET_EVENTS.MOVEMENT, m)}
         onShoot={() => socket?.emit(SOCKET_EVENTS.SHOOT)}
       />
-    </ResponsiveLayout>
+    </div>
   );
 }
