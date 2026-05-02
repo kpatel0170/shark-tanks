@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useEffect, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Text, useGLTF, useTexture } from "@react-three/drei";
+import { Billboard, Text, useGLTF, useTexture } from "@react-three/drei";
 import { Suspense } from "react";
 import type { Group, Mesh } from "three";
 import { Vector3, CubeTextureLoader, PCFShadowMap, MathUtils } from "three";
@@ -111,6 +111,61 @@ function Skybox() {
   return null;
 }
 
+// ─── Tank label: always faces the camera via Billboard ────────────────────────
+// Replaces the old fixed-rotation Text + emoji hearts, which mirrored at
+// certain camera angles and rendered hearts as wireframe SVG outlines.
+
+function TankLabel({
+  nickname,
+  health,
+  maxHealth,
+  isLocalPlayer,
+}: {
+  nickname: string;
+  health: number;
+  maxHealth: number;
+  isLocalPlayer: boolean;
+}) {
+  const pct      = maxHealth > 0 ? Math.max(0, health) / maxHealth : 0;
+  const BAR_W    = 90;
+  const BAR_H    = 7;
+  const fillW    = Math.max(1, BAR_W * pct);
+  const barColor = pct > 0.6 ? "#00ff88" : pct > 0.3 ? "#ffcc00" : "#ff4444";
+  const nameColor = isLocalPlayer ? "#00ff88" : "#ffffff";
+
+  return (
+    // Billboard rotates children to face the camera every frame —
+    // no manual rotation needed, no mirroring at any angle.
+    <Billboard position={[0, 130, 0]}>
+      {/* Nickname */}
+      <Text
+        fontSize={16}
+        color={nameColor}
+        anchorX="center"
+        anchorY="bottom"
+        position={[0, 6, 0]}
+        outlineWidth={1.5}
+        outlineColor="#000000"
+        outlineOpacity={1}
+      >
+        {nickname}
+      </Text>
+
+      {/* Health bar — dark track */}
+      <mesh position={[0, -4, 0]}>
+        <planeGeometry args={[BAR_W, BAR_H]} />
+        <meshBasicMaterial color="#111111" transparent opacity={0.85} depthTest={false} />
+      </mesh>
+
+      {/* Health bar — coloured fill, anchored to left edge */}
+      <mesh position={[(fillW - BAR_W) / 2, -4, 0.1]}>
+        <planeGeometry args={[fillW, BAR_H]} />
+        <meshBasicMaterial color={barColor} depthTest={false} />
+      </mesh>
+    </Billboard>
+  );
+}
+
 function TankModel({
   player,
   isLocalPlayer,
@@ -122,8 +177,6 @@ function TankModel({
   const { scene: gltfScene } = useGLTF("/models/tank4.glb");
   const clonedScene = useMemo(() => gltfScene.clone(), [gltfScene]);
 
-  // Client-side interpolation: smooths 20 Hz server snapshots into per-frame
-  // movement so position and rotation never snap between ticks.
   const interp = useRef<InterpState>(makeInterp(player.x, player.y, player.angle));
 
   useFrame((_, delta) => {
@@ -134,8 +187,6 @@ function TankModel({
     meshRef.current.rotation.y = -iAngle;
   });
 
-  const healthHearts = "❤️".repeat(Math.max(0, player.health));
-
   return (
     <group ref={meshRef}>
       {/* Green ring under the local player's tank */}
@@ -145,31 +196,15 @@ function TankModel({
           <meshBasicMaterial color="#00ff88" transparent opacity={0.7} />
         </mesh>
       )}
+
       <primitive object={clonedScene} scale={[16, 16, 16]} />
-      <Text
-        position={[0, 120, 0]}
-        rotation={[0, Math.PI / 2, 0]}
-        fontSize={16}
-        color="white"
-        anchorX="center"
-        anchorY="middle"
-        outlineWidth={0.5}
-        outlineColor="black"
-      >
-        {player.nickname}
-      </Text>
-      <Text
-        position={[0, 100, 0]}
-        rotation={[0, Math.PI / 2, 0]}
-        fontSize={14}
-        color="#00ff00"
-        anchorX="center"
-        anchorY="middle"
-        outlineWidth={0.3}
-        outlineColor="black"
-      >
-        {healthHearts}
-      </Text>
+
+      <TankLabel
+        nickname={player.nickname}
+        health={player.health}
+        maxHealth={player.maxHealth}
+        isLocalPlayer={isLocalPlayer}
+      />
     </group>
   );
 }
