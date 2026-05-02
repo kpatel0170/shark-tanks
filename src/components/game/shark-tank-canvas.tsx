@@ -5,8 +5,12 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Text, useGLTF, useTexture } from "@react-three/drei";
 import { Suspense } from "react";
 import type { Group, Mesh } from "three";
-import { Vector3, CubeTextureLoader } from "three";
+import { Vector3, CubeTextureLoader, PCFShadowMap } from "three";
 import type { BulletState, PlayerState } from "@/lib/game-types";
+
+// Stable shadow config — inline object would create a new reference each render,
+// causing R3F to re-apply shadow settings and trigger the deprecation warning.
+const SHADOW_CONFIG = { type: PCFShadowMap };
 
 // Module-level preloads — must be outside components (drei requirement)
 useGLTF.preload("/models/tank4.glb");
@@ -247,23 +251,29 @@ export function SharkTankCanvas({
     [players, localSocketId],
   );
 
+  // Memoize all Canvas props — new object/array references on every render
+  // cause R3F to re-apply renderer settings, which triggers Three.js warnings.
+  const dpr = useMemo<[number, number]>(
+    () =>
+      quality === "high"   ? [1, 2]   :
+      quality === "medium" ? [1, 1.5] : [1, 1],
+    [quality],
+  );
+  const glOptions = useMemo(() => ({ antialias: quality !== "low" }), [quality]);
+
   useEffect(() => { setIsClient(true); }, []);
 
   if (!isClient) {
     return <div className="h-screen w-full bg-[#001133]" />;
   }
 
-  const dpr: [number, number] =
-    quality === "high"   ? [1, 2]   :
-    quality === "medium" ? [1, 1.5] : [1, 1];
-
   return (
     <div className="h-screen w-full" style={{ touchAction: "none" }}>
       <Canvas
-        shadows
+        shadows={SHADOW_CONFIG}
         dpr={dpr}
         camera={{ position: [1000, 300, 1000], fov: 100, near: 0.5, far: 20000 }}
-        gl={{ antialias: quality !== "low" }}
+        gl={glOptions}
       >
         <color attach="background" args={["#001133"]} />
         <Suspense fallback={null}>
