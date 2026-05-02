@@ -1,5 +1,6 @@
 "use client";
 
+import { Volume2, VolumeX } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import type { PlayerState } from "@/lib/game-types";
 
@@ -144,7 +145,7 @@ export function GameSettings({ quality, onQualityChange, muted, onToggleMute }: 
         title={muted ? "Unmute" : "Mute"}
         className="text-slate-400 hover:text-white transition-colors text-sm leading-none"
       >
-        {muted ? "🔇" : "🔊"}
+        {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
       </button>
 
       <span className="text-white/10">|</span>
