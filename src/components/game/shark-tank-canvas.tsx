@@ -8,13 +8,13 @@ import type { Group, Mesh } from "three";
 import { Vector3, CubeTextureLoader, PCFShadowMap, MathUtils } from "three";
 import type { BulletState, PlayerState } from "@/lib/game-types";
 
-// Server tick period in seconds — interpolation runs over exactly one tick
+// Server tick period in seconds
 const TICK_S = 0.05;
 
 const { lerp } = MathUtils;
 
-// Stable shadow config — inline object would create a new reference each render,
-// causing R3F to re-apply renderer settings and trigger deprecation warnings.
+// Stable shadow config — inline object creates a new reference each render
+// which causes R3F to re-apply renderer settings and trigger deprecation warnings.
 const SHADOW_CONFIG = { type: PCFShadowMap };
 
 // Module-level preloads — must be outside components (drei requirement)
@@ -29,6 +29,68 @@ const WALLS = [
   { id: 4, x: -1000, y: -1000, width: 200, height: 1000 },
   { id: 5, x: -1500, y: 700,   width: 200, height: 1000 },
 ];
+
+// ─── Interpolation helpers ────────────────────────────────────────────────────
+
+// Shortest-path angle lerp — prevents spinning the long way around when crossing ±π
+function lerpAngle(a: number, b: number, t: number): number {
+  let d = ((b - a) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+  return a + d * t;
+}
+
+// Full state for one interpolated entity (position + heading)
+type InterpState = {
+  fromX: number; fromY: number; fromAngle: number;
+  toX:   number; toY:   number; toAngle:   number;
+  t: number;
+};
+
+function makeInterp(x: number, y: number, angle: number): InterpState {
+  return { fromX: x, fromY: y, fromAngle: angle, toX: x, toY: y, toAngle: angle, t: 1 };
+}
+
+// Advance interpolation each frame.
+// Detects new server snapshots by value comparison and restarts from the
+// current visual position, so there is never a visible snap.
+function stepInterp(
+  s: InterpState,
+  sx: number, sy: number, sAngle: number,
+  delta: number,
+): [number, number, number] {
+  if (sx !== s.toX || sy !== s.toY || sAngle !== s.toAngle) {
+    s.fromX     = lerp(s.fromX, s.toX, s.t);
+    s.fromY     = lerp(s.fromY, s.toY, s.t);
+    s.fromAngle = lerpAngle(s.fromAngle, s.toAngle, s.t);
+    s.toX = sx; s.toY = sy; s.toAngle = sAngle;
+    s.t = 0;
+  }
+  s.t = Math.min(s.t + delta / TICK_S, 1);
+  return [
+    lerp(s.fromX, s.toX, s.t),
+    lerp(s.fromY, s.toY, s.t),
+    lerpAngle(s.fromAngle, s.toAngle, s.t),
+  ];
+}
+
+// Position-only variant for bullets (no heading needed)
+type InterpXZ = { fromX: number; fromY: number; toX: number; toY: number; t: number };
+
+function makeInterpXZ(x: number, y: number): InterpXZ {
+  return { fromX: x, fromY: y, toX: x, toY: y, t: 1 };
+}
+
+function stepInterpXZ(s: InterpXZ, sx: number, sy: number, delta: number): [number, number] {
+  if (sx !== s.toX || sy !== s.toY) {
+    s.fromX = lerp(s.fromX, s.toX, s.t);
+    s.fromY = lerp(s.fromY, s.toY, s.t);
+    s.toX = sx; s.toY = sy;
+    s.t = 0;
+  }
+  s.t = Math.min(s.t + delta / TICK_S, 1);
+  return [lerp(s.fromX, s.toX, s.t), lerp(s.fromY, s.toY, s.t)];
+}
+
+// ─── Scene components ─────────────────────────────────────────────────────────
 
 function Skybox() {
   const { scene } = useThree();
@@ -49,35 +111,6 @@ function Skybox() {
   return null;
 }
 
-// Interpolation state shape — reused by tanks, bullets, and camera
-type Interp2D = { fromX: number; fromY: number; toX: number; toY: number; t: number };
-
-function makeInterp(x: number, y: number): Interp2D {
-  return { fromX: x, fromY: y, toX: x, toY: y, t: 1 };
-}
-
-// Advance a 2D interpolator each frame.
-// When toX/toY change (new server snapshot), restart from the current visual pos.
-function stepInterp(
-  interp: Interp2D,
-  serverX: number,
-  serverY: number,
-  delta: number,
-): [number, number] {
-  if (serverX !== interp.toX || serverY !== interp.toY) {
-    interp.fromX = lerp(interp.fromX, interp.toX, interp.t);
-    interp.fromY = lerp(interp.fromY, interp.toY, interp.t);
-    interp.toX = serverX;
-    interp.toY = serverY;
-    interp.t = 0;
-  }
-  interp.t = Math.min(interp.t + delta / TICK_S, 1);
-  return [
-    lerp(interp.fromX, interp.toX, interp.t),
-    lerp(interp.fromY, interp.toY, interp.t),
-  ];
-}
-
 function TankModel({
   player,
   isLocalPlayer,
@@ -89,16 +122,16 @@ function TankModel({
   const { scene: gltfScene } = useGLTF("/models/tank4.glb");
   const clonedScene = useMemo(() => gltfScene.clone(), [gltfScene]);
 
-  // Client-side position interpolation — smooths the 20 Hz server snapshots
-  // into per-frame movement so there is no visible snap/jitter during movement.
-  const interp = useRef<Interp2D>(makeInterp(player.x, player.y));
+  // Client-side interpolation: smooths 20 Hz server snapshots into per-frame
+  // movement so position and rotation never snap between ticks.
+  const interp = useRef<InterpState>(makeInterp(player.x, player.y, player.angle));
 
   useFrame((_, delta) => {
     if (!meshRef.current) return;
-    const { x, y, width, height, angle } = player;
-    const [ix, iy] = stepInterp(interp.current, x, y, delta);
+    const { x, y, angle, width, height } = player;
+    const [ix, iy, iAngle] = stepInterp(interp.current, x, y, angle, delta);
     meshRef.current.position.set(ix + width / 2, height / 2, iy + height / 2);
-    meshRef.current.rotation.y = -angle;
+    meshRef.current.rotation.y = -iAngle;
   });
 
   const healthHearts = "❤️".repeat(Math.max(0, player.health));
@@ -156,12 +189,11 @@ function BulletMesh({ bullet, isOwn }: { bullet: BulletState; isOwn: boolean }) 
   const color    = isOwn ? "#ff6b6b" : "#4ecdc4";
   const emissive = isOwn ? "#ff0000" : "#00ffff";
 
-  // Bullets also snap at 20 Hz — interpolate for smooth trajectories
-  const interp = useRef<Interp2D>(makeInterp(bullet.x, bullet.y));
+  const interp = useRef<InterpXZ>(makeInterpXZ(bullet.x, bullet.y));
 
   useFrame((_, delta) => {
     if (!meshRef.current) return;
-    const [ix, iy] = stepInterp(interp.current, bullet.x, bullet.y, delta);
+    const [ix, iy] = stepInterpXZ(interp.current, bullet.x, bullet.y, delta);
     meshRef.current.position.set(ix, 25, iy);
     meshRef.current.rotation.x += 0.1;
     meshRef.current.rotation.y += 0.1;
@@ -182,32 +214,33 @@ function BulletMesh({ bullet, isOwn }: { bullet: BulletState; isOwn: boolean }) 
   );
 }
 
-// Persistent vector — avoids allocating a new Vector3 every frame
-const _camTarget = new Vector3();
-
 function CameraController({ localPlayer }: { localPlayer?: PlayerState }) {
   const { camera } = useThree();
-  const camPos = useRef(new Vector3(1000, 300, 1000));
 
-  // Camera follows an interpolated player position, not the raw server snapshot,
-  // so the look-at target is smooth and doesn't jerk every 50 ms.
-  const interp = useRef<Interp2D | null>(null);
+  // Camera interpolates position AND angle independently.
+  // No secondary lerp on top — the interpolation itself provides all the
+  // smoothing needed. A second lerp would create lag-then-catch-up oscillation.
+  const interp = useRef<InterpState | null>(null);
 
   useFrame((_, delta) => {
     if (!localPlayer) return;
 
-    const px = localPlayer.x + localPlayer.width / 2;
-    const pz = localPlayer.y + localPlayer.height / 2;
+    const px    = localPlayer.x + localPlayer.width  / 2;
+    const pz    = localPlayer.y + localPlayer.height / 2;
+    const angle = localPlayer.angle;
 
-    // Lazily initialise on first frame (player not available at component creation)
-    if (!interp.current) interp.current = makeInterp(px, pz);
+    // Lazily initialise once the local player is first available
+    if (!interp.current) interp.current = makeInterp(px, pz, angle);
 
-    const [ix, iz] = stepInterp(interp.current, px, pz, delta);
-    const { angle } = localPlayer;
+    const [ix, iz, iAngle] = stepInterp(interp.current, px, pz, angle, delta);
 
-    _camTarget.set(ix - 150 * Math.cos(angle), 200, iz - 150 * Math.sin(angle));
-    camPos.current.lerp(_camTarget, 0.1);
-    camera.position.copy(camPos.current);
+    // Position camera directly — no extra lerp. The interpolated values are
+    // already per-frame smooth so a second smoothing pass only adds oscillation.
+    camera.position.set(
+      ix - 150 * Math.cos(iAngle),
+      200,
+      iz - 150 * Math.sin(iAngle),
+    );
     camera.lookAt(ix, 50, iz);
   });
 
