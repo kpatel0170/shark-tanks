@@ -1,19 +1,6 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import {
-  Trophy,
-  Users,
-  Settings,
-  Volume2,
-  VolumeX,
-  Navigation,
-  Target,
-  Gamepad2,
-} from "lucide-react";
 
 // ─── Game Stats (top-left HUD) ───────────────────────────────────────────────
 
@@ -27,36 +14,30 @@ interface GameStatsProps {
 export function GameStats({ score, activePlayers, health, maxHealth }: GameStatsProps) {
   const healthPct = maxHealth > 0 ? Math.round((health / maxHealth) * 100) : 0;
   const healthColor =
-    healthPct > 60 ? "bg-green-500" :
+    healthPct > 60 ? "bg-[#00ff88]" :
     healthPct > 30 ? "bg-yellow-500" : "bg-red-500";
 
   return (
-    <Card className="bg-black/80 backdrop-blur-sm border-white/20 min-w-[160px]">
-      <CardContent className="p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <Trophy className="w-4 h-4 text-yellow-500 shrink-0" />
-          <span className="text-xl font-bold text-white">{score.toLocaleString()}</span>
-        </div>
+    <div className="bg-black/60 backdrop-blur-sm rounded border border-white/10 px-3 py-2.5 space-y-2 min-w-[130px]">
+      <div className="text-2xl font-black text-white font-mono leading-none">{score.toLocaleString()}</div>
 
-        <Badge className="bg-slate-700 text-white gap-1">
-          <Users className="w-3 h-3" />
-          {activePlayers} {activePlayers === 1 ? "player" : "players"}
-        </Badge>
-
-        {maxHealth > 0 && (
-          <div className="space-y-1">
-            <div className="text-xs text-slate-400">
-              HP {health}/{maxHealth}
-            </div>
-            <Progress value={healthPct} className="h-2" indicatorClassName={healthColor} />
+      {maxHealth > 0 && (
+        <div className="space-y-1">
+          <div className="text-[10px] tracking-widest uppercase text-slate-400">
+            HP {health}/{maxHealth}
           </div>
-        )}
-      </CardContent>
-    </Card>
+          <Progress value={healthPct} className="h-1.5 bg-white/10" indicatorClassName={healthColor} />
+        </div>
+      )}
+
+      <div className="text-[10px] tracking-widest uppercase text-slate-500">
+        {activePlayers} {activePlayers === 1 ? "player" : "players"} online
+      </div>
+    </div>
   );
 }
 
-// ─── Game Settings (top-right HUD, desktop only) ─────────────────────────────
+// ─── Quality Setting (compact, desktop only) ─────────────────────────────────
 
 interface GameSettingsProps {
   quality: "high" | "medium" | "low";
@@ -65,80 +46,50 @@ interface GameSettingsProps {
 
 export function GameSettings({ quality, onQualityChange }: GameSettingsProps) {
   return (
-    <Card className="bg-black/80 backdrop-blur-sm border-white/20">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
-          <Settings className="w-4 h-4" />
-          Settings
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-sm text-white">Quality</span>
-          <select
-            value={quality}
-            onChange={(e) => onQualityChange(e.target.value as "high" | "medium" | "low")}
-            className="bg-black/60 text-white px-2 py-1 rounded border border-white/20 text-sm"
-          >
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="bg-black/60 backdrop-blur-sm rounded border border-white/10 px-3 py-2 flex items-center gap-2">
+      <span className="text-[10px] tracking-widest uppercase text-slate-400">Quality</span>
+      <select
+        value={quality}
+        onChange={(e) => onQualityChange(e.target.value as "high" | "medium" | "low")}
+        className="bg-transparent text-white text-xs border-none outline-none cursor-pointer"
+      >
+        <option value="high" className="bg-black">High</option>
+        <option value="medium" className="bg-black">Medium</option>
+        <option value="low" className="bg-black">Low</option>
+      </select>
+    </div>
   );
 }
 
-// ─── Event Feed (bottom-left HUD) ────────────────────────────────────────────
+// ─── Event Feed (top-right HUD) ───────────────────────────────────────────────
+// Each event is its own floating pill — right-aligned so newest entries
+// sit near the screen edge and never overlap with game-play UI.
 
 interface GameFeedProps {
   feed: string[];
 }
 
-export function GameFeed({ feed }: GameFeedProps) {
-  return (
-    <Card className="bg-black/80 backdrop-blur-sm border-white/20 max-w-xs">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
-          <Target className="w-4 h-4" />
-          Events
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="max-h-28 space-y-0.5 overflow-y-auto text-xs">
-          {feed.length ? (
-            feed.map((item, i) => (
-              <p key={`${item}-${i}`} className="text-slate-300">{item}</p>
-            ))
-          ) : (
-            <p className="text-slate-500">No events yet.</p>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  );
+function feedColor(msg: string): string {
+  if (msg.startsWith("You")) return "text-yellow-300";
+  if (msg.includes("destroyed")) return "text-red-400";
+  if (msg.includes("joined")) return "text-[#00ff88]";
+  return "text-slate-300";
 }
 
-// ─── Controls Reference (bottom-right HUD, desktop only) ─────────────────────
+export function GameFeed({ feed }: GameFeedProps) {
+  // Show newest 5, newest at the bottom
+  const visible = feed.slice(-5);
 
-export function ControlsInfo() {
   return (
-    <Card className="bg-black/80 backdrop-blur-sm border-white/20">
-      <CardContent className="p-3 space-y-1.5 text-xs text-white">
-        <div className="flex items-center gap-1.5">
-          <Navigation className="w-3 h-3" />
-          WASD / Arrows — Move
+    <div className="flex flex-col items-end gap-1 pointer-events-none">
+      {visible.map((item, i) => (
+        <div
+          key={`${i}-${item}`}
+          className={`px-2.5 py-1 rounded text-xs font-medium bg-black/60 backdrop-blur-sm border border-white/10 ${feedColor(item)}`}
+        >
+          {item}
         </div>
-        <div className="flex items-center gap-1.5">
-          <Target className="w-3 h-3" />
-          Space / X — Shoot
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Gamepad2 className="w-3 h-3" />
-          Mobile pad below on touch
-        </div>
-      </CardContent>
-    </Card>
+      ))}
+    </div>
   );
 }

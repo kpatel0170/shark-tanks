@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SharkTankCanvas } from "@/components/game/shark-tank-canvas";
 import { MobileControls } from "@/components/game/mobile-controls";
-import { GameStats, GameSettings, GameFeed, ControlsInfo } from "@/components/ui/game-ui";
+import { GameStats, GameSettings, GameFeed } from "@/components/ui/game-ui";
 import { useSocket } from "@/components/socket-provider";
 import { type BulletState, type Movement, type PlayerState } from "@/lib/game-types";
 import { SOCKET_EVENTS } from "@/lib/socket";
@@ -32,22 +32,21 @@ function DeathOverlay({
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
       <div className="flex flex-col items-center gap-6 rounded-xl border border-red-800 bg-black/90 px-10 py-8 text-center shadow-2xl">
-        <div className="text-5xl">💥</div>
         <h2 className="text-2xl font-bold tracking-widest text-red-400 uppercase">
           You Were Destroyed
         </h2>
         <div className="flex gap-4">
           <button
             onClick={onRespawn}
-            className="rounded-lg bg-green-700 px-6 py-2 font-semibold text-white transition hover:bg-green-600"
+            className="rounded bg-[#00ff88] px-6 py-2 font-bold text-sm tracking-widest uppercase text-black hover:bg-[#00e87a] transition-colors"
           >
             Respawn
           </button>
           <button
             onClick={onLobby}
-            className="rounded-lg bg-zinc-700 px-6 py-2 font-semibold text-white transition hover:bg-zinc-600"
+            className="rounded bg-white/10 px-6 py-2 font-bold text-sm tracking-widest uppercase text-white hover:bg-white/20 transition-colors"
           >
-            Exit to Lobby
+            Exit
           </button>
         </div>
       </div>
@@ -59,13 +58,12 @@ function DisconnectOverlay({ onReconnect }: { onReconnect: () => void }) {
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
       <div className="flex flex-col items-center gap-6 rounded-xl border border-yellow-700 bg-black/90 px-10 py-8 text-center shadow-2xl">
-        <div className="text-5xl">📡</div>
         <h2 className="text-2xl font-bold tracking-widest text-yellow-400 uppercase">
           Connection Lost
         </h2>
         <button
           onClick={onReconnect}
-          className="rounded-lg bg-yellow-600 px-6 py-2 font-semibold text-white transition hover:bg-yellow-500"
+          className="rounded bg-yellow-600 px-6 py-2 font-bold text-sm tracking-widest uppercase text-white hover:bg-yellow-500 transition-colors"
         >
           Reconnect
         </button>
@@ -78,12 +76,12 @@ export default function GamePage() {
   const router = useRouter();
   const socket = useSocket();
 
-  const [players, setPlayers]             = useState<PlayerState[]>([]);
-  const [bullets, setBullets]             = useState<BulletState[]>([]);
-  const [activePlayers, setActivePlayers] = useState(0);
-  const [feed, setFeed]                   = useState<string[]>([]);
-  const [quality, setQuality]             = useState<"high" | "medium" | "low">("high");
-  const [isDead, setIsDead]               = useState(false);
+  const [players, setPlayers]               = useState<PlayerState[]>([]);
+  const [bullets, setBullets]               = useState<BulletState[]>([]);
+  const [activePlayers, setActivePlayers]   = useState(0);
+  const [feed, setFeed]                     = useState<string[]>([]);
+  const [quality, setQuality]               = useState<"high" | "medium" | "low">("high");
+  const [isDead, setIsDead]                 = useState(false);
   const [isDisconnected, setIsDisconnected] = useState(false);
 
   const pressedKeys = useRef<Set<string>>(new Set());
@@ -126,7 +124,6 @@ export default function GamePage() {
     const onDeath   = ({ nickname }: { nickname?: string }) =>
       pushFeed(`${nickname || "Someone"} was destroyed`);
 
-    // Show death overlay — do NOT auto-navigate so the player can respawn
     const onDead    = () => { pushFeed("You were destroyed"); setIsDead(true); };
 
     const onCount   = ({ count = 0 }: { count?: number }) => setActivePlayers(count);
@@ -138,7 +135,7 @@ export default function GamePage() {
     socket.on(SOCKET_EVENTS.UPDATED_PLAYER_LIST, onDeath);
     socket.on(SOCKET_EVENTS.DEAD,                onDead);
     socket.on(SOCKET_EVENTS.UPDATED_USER_LIST,   onCount);
-    socket.on('disconnect',                      onDisconnect);
+    socket.on("disconnect",                      onDisconnect);
 
     socket.emit(SOCKET_EVENTS.GAME_START, { nickname });
 
@@ -148,9 +145,8 @@ export default function GamePage() {
       socket.off(SOCKET_EVENTS.UPDATED_PLAYER_LIST, onDeath);
       socket.off(SOCKET_EVENTS.DEAD,                onDead);
       socket.off(SOCKET_EVENTS.UPDATED_USER_LIST,   onCount);
-      socket.off('disconnect',                      onDisconnect);
+      socket.off("disconnect",                      onDisconnect);
     };
-  // router intentionally omitted — it's only used in onClick handlers, not inside this effect
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket]);
 
@@ -197,8 +193,8 @@ export default function GamePage() {
         quality={quality}
       />
 
-      {/* Top-left: score + player count + health */}
-      <div className="absolute top-4 left-4 z-50">
+      {/* Top-left: score + health + player count */}
+      <div className="absolute top-3 left-3 z-40">
         <GameStats
           score={localPlayer?.point ?? 0}
           activePlayers={activePlayers}
@@ -207,22 +203,15 @@ export default function GamePage() {
         />
       </div>
 
-      {/* Top-right: quality (desktop only) */}
-      <div className="absolute top-4 right-4 z-50 hidden md:block">
-        <GameSettings quality={quality} onQualityChange={setQuality} />
-      </div>
-
-      {/* Bottom-left: event feed */}
-      <div className="absolute bottom-4 left-4 z-50 hidden sm:block">
+      {/* Top-right: event feed (always visible) + quality setting (desktop only) */}
+      <div className="absolute top-3 right-3 z-40 flex flex-col items-end gap-2">
         <GameFeed feed={feed} />
+        <div className="hidden md:block">
+          <GameSettings quality={quality} onQualityChange={setQuality} />
+        </div>
       </div>
 
-      {/* Bottom-right: controls hint (desktop only) */}
-      <div className="absolute bottom-4 right-4 z-50 hidden md:block">
-        <ControlsInfo />
-      </div>
-
-      {/* Mobile: d-pad + fire + bottom bar */}
+      {/* Mobile controls */}
       <MobileControls
         onMovementChange={(m) => socket?.emit(SOCKET_EVENTS.MOVEMENT, m)}
         onShoot={() => socket?.emit(SOCKET_EVENTS.SHOOT)}
