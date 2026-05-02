@@ -2,10 +2,14 @@
 
 type Handler = (payload: Record<string, unknown>) => void
 
+// Ping interval (ms) — keeps Replit's reverse proxy from closing idle WS connections
+const PING_INTERVAL_MS = 20_000
+
 export class GameSocket {
   private ws: WebSocket
   private listeners = new Map<string, Set<Handler>>()
   private queue: string[] = []
+  private pingTimer: ReturnType<typeof setInterval> | null = null
 
   id: string | undefined = undefined
   connected = false
@@ -17,11 +21,14 @@ export class GameSocket {
       this.connected = true
       this.queue.forEach(msg => this.ws.send(msg))
       this.queue = []
+      this.startPing()
       this.dispatch('connect', {})
     }
 
     this.ws.onclose = () => {
       this.connected = false
+      this.stopPing()
+      this.dispatch('disconnect', {})
     }
 
     this.ws.onmessage = ({ data }) => {
@@ -33,6 +40,22 @@ export class GameSocket {
         this.id = payload.id
       }
       this.dispatch(type, payload)
+    }
+  }
+
+  private startPing() {
+    this.pingTimer = setInterval(() => {
+      if (this.ws.readyState === WebSocket.OPEN) {
+        // Lightweight ping — server ignores unknown types, just keeps the connection alive
+        this.ws.send(JSON.stringify({ type: 'ping' }))
+      }
+    }, PING_INTERVAL_MS)
+  }
+
+  private stopPing() {
+    if (this.pingTimer !== null) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = null
     }
   }
 
@@ -60,6 +83,7 @@ export class GameSocket {
   }
 
   disconnect() {
+    this.stopPing()
     this.queue = []
     this.ws.close()
   }
