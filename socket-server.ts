@@ -20,9 +20,10 @@ type LobbyMember = {
 type Broadcast = (type: string, payload?: Record<string, unknown>) => void
 type SendTo = (socketId: string, type: string, payload?: Record<string, unknown>) => void
 
-const GROUND_MIN = -2500
-const GROUND_MAX = 2500
-const TICK_RATE = 1000 / 20
+const GROUND_MIN     = -2500
+const GROUND_MAX     = 2500
+const TICK_RATE      = 1000 / 20
+const ROUND_DURATION = 180   // seconds — 3-minute rounds
 
 class GameObject {
   public id: number
@@ -33,12 +34,12 @@ class GameObject {
   public angle: number
 
   constructor(props: Partial<GameObject> = {}) {
-    this.id = Math.floor(Math.random() * 1_000_000_000)
-    this.x = props.x ?? 0
-    this.y = props.y ?? 0
-    this.width = props.width ?? 0
+    this.id     = Math.floor(Math.random() * 1_000_000_000)
+    this.x      = props.x      ?? 0
+    this.y      = props.y      ?? 0
+    this.width  = props.width  ?? 0
     this.height = props.height ?? 0
-    this.angle = props.angle ?? 0
+    this.angle  = props.angle  ?? 0
   }
 
   move(distance: number, walls: EntityMap<Wall>): boolean {
@@ -51,7 +52,7 @@ class GameObject {
     const outOfBounds =
       this.x < GROUND_MIN ||
       this.y < GROUND_MIN ||
-      this.x + this.width > GROUND_MAX ||
+      this.x + this.width  > GROUND_MAX ||
       this.y + this.height > GROUND_MAX
 
     if (outOfBounds || Object.values(walls).some(w => this.intersects(w))) {
@@ -65,8 +66,8 @@ class GameObject {
 
   intersects(other: GameObject): boolean {
     return (
-      this.x <= other.x + other.width &&
-      this.x + this.width >= other.x &&
+      this.x <= other.x + other.width  &&
+      this.x + this.width  >= other.x  &&
       this.y <= other.y + other.height &&
       this.y + this.height >= other.y
     )
@@ -84,7 +85,7 @@ class Bullet extends GameObject {
 
   constructor(props: Partial<GameObject> & { player: Player }) {
     super(props)
-    this.width = 15
+    this.width  = 15
     this.height = 15
     this.player = props.player
   }
@@ -100,31 +101,35 @@ class Bullet extends GameObject {
 }
 
 class Player extends GameObject {
-  public socketId?: string
-  public nickname: string
-  public health: number
-  public maxHealth: number
-  public point: number
-  public bullets: EntityMap<Bullet>
-  public movement: Movement
-  public spectating: boolean
+  public socketId?:           string
+  public nickname:            string
+  public health:              number
+  public maxHealth:           number
+  public point:               number
+  public bullets:             EntityMap<Bullet>
+  public movement:            Movement
+  public spectating:          boolean
+  public spawnProtectedUntil: number   // ms timestamp — no damage before this
 
   constructor(props: { socketId?: string; nickname: string }, walls: EntityMap<Wall>) {
     super()
-    this.socketId = props.socketId
-    this.nickname = props.nickname
-    this.width = 80
-    this.height = 80
-    this.health = 10
+    this.socketId  = props.socketId
+    this.nickname  = props.nickname
+    this.width     = 80
+    this.height    = 80
+    this.health    = 10
     this.maxHealth = 10
-    this.point = 0
-    this.bullets = {}
-    this.movement = {}
+    this.point     = 0
+    this.bullets   = {}
+    this.movement  = {}
     this.spectating = false
+    // BUG FIX: was Math.random() * GROUND_MAX → only top-right quadrant.
+    // Now spans the full map (GROUND_MIN → GROUND_MAX).
+    this.spawnProtectedUntil = Date.now() + 2000
 
     do {
-      this.x = Math.random() * (GROUND_MAX - this.width)
-      this.y = Math.random() * (GROUND_MAX - this.height)
+      this.x     = GROUND_MIN + Math.random() * (GROUND_MAX - GROUND_MIN - this.width)
+      this.y     = GROUND_MIN + Math.random() * (GROUND_MAX - GROUND_MIN - this.height)
       this.angle = Math.random() * Math.PI * 2
     } while (Object.values(walls).some(w => this.intersects(w)))
   }
@@ -132,18 +137,21 @@ class Player extends GameObject {
   shoot(gameState: GameState) {
     if (Object.keys(this.bullets).length >= 5 || this.spectating) return
     const bullet = new Bullet({
-      x: this.x + this.width / 2,
+      x: this.x + this.width  / 2,
       y: this.y + this.height / 2,
       angle: this.angle,
       player: this,
     })
     bullet.move(this.width / 2, gameState.walls)
-    this.bullets[bullet.id] = bullet
+    this.bullets[bullet.id]    = bullet
     gameState.bullets[bullet.id] = bullet
   }
 
   damage(broadcast: Broadcast, sendTo: SendTo, gameState: GameState) {
     if (this.spectating) return
+    // Spawn protection — ignore all damage for 2 seconds after spawning
+    if (Date.now() < this.spawnProtectedUntil) return
+
     this.health -= 1
     if (this.health <= 0) {
       if (this.socketId) sendTo(this.socketId, SOCKET_EVENTS.DEAD)
@@ -159,12 +167,13 @@ class Player extends GameObject {
   override toJSON() {
     return {
       ...super.toJSON(),
-      socketId: this.socketId,
-      nickname: this.nickname,
-      health: this.health,
-      maxHealth: this.maxHealth,
-      point: this.point,
-      spectating: this.spectating,
+      socketId:           this.socketId,
+      nickname:           this.nickname,
+      health:             this.health,
+      maxHealth:          this.maxHealth,
+      point:              this.point,
+      spectating:         this.spectating,
+      spawnProtected:     Date.now() < this.spawnProtectedUntil,
     }
   }
 }
@@ -182,7 +191,6 @@ class BotPlayer extends Player {
       )
 
       if (humans.length > 0) {
-        // Pick closest by Euclidean distance
         const nearest = humans.reduce((best, p) => {
           const d  = (p.x - this.x) ** 2 + (p.y - this.y) ** 2
           const db = (best.x - this.x) ** 2 + (best.y - this.y) ** 2
@@ -200,9 +208,8 @@ class BotPlayer extends Player {
         const targetAngle = Math.atan2(dy, dx)
 
         // Shortest-path angle difference
-        let diff = ((targetAngle - this.angle) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI
+        const diff = ((targetAngle - this.angle) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI
 
-        // Rotate toward target at a fixed turn rate
         const TURN_RATE = 0.07
         if (Math.abs(diff) > TURN_RATE) {
           this.angle += Math.sign(diff) * TURN_RATE
@@ -210,19 +217,16 @@ class BotPlayer extends Player {
           this.angle = targetAngle
         }
 
-        // Move forward when roughly aimed (within ~23°) — back off if too close
         if (Math.abs(diff) < 0.4) {
           if (dist > 200) {
             if (!this.move(5, gameState.walls)) this.angle += Math.PI / 3
           }
         }
 
-        // Shoot when in range and well-aimed (within ~11°)
         if (dist < 900 && Math.abs(diff) < 0.2) {
           this.shoot(gameState)
         }
       } else {
-        // No humans — roam randomly
         if (!this.move(4, gameState.walls)) this.angle = Math.random() * Math.PI * 2
         if (Math.random() < 0.02) this.shoot(gameState)
       }
@@ -238,7 +242,7 @@ class BotPlayer extends Player {
     if (this.health <= 0) {
       this.cleanup()
       const { nickname } = this
-      const { walls } = gameState
+      const { walls }    = gameState
       setTimeout(() => {
         const newBot = new BotPlayer({ nickname }, walls, gameState)
         gameState.players[newBot.id] = newBot
@@ -248,9 +252,9 @@ class BotPlayer extends Player {
 }
 
 type GameState = {
-  players: EntityMap<Player>
-  bullets: EntityMap<Bullet>
-  walls: EntityMap<Wall>
+  players:    EntityMap<Player>
+  bullets:    EntityMap<Bullet>
+  walls:      EntityMap<Wall>
   lobbyRooms: Record<string, LobbyMember[]>
   matchStart: number
 }
@@ -258,11 +262,11 @@ type GameState = {
 function createWalls(): EntityMap<Wall> {
   const walls: EntityMap<Wall> = {}
   const definitions = [
-    { x: 0, y: 2, width: 200, height: 1000 },
-    { x: 1000, y: 100, width: 200, height: 1000 },
-    { x: 2000, y: 1000, width: 200, height: 1000 },
-    { x: -1000, y: -1000, width: 200, height: 1000 },
-    { x: -1500, y: 700, width: 200, height: 1000 },
+    { x:    0, y:     2, width: 200, height: 1000 },
+    { x: 1000, y:   100, width: 200, height: 1000 },
+    { x: 2000, y:  1000, width: 200, height: 1000 },
+    { x:-1000, y: -1000, width: 200, height: 1000 },
+    { x:-1500, y:   700, width: 200, height: 1000 },
   ]
   definitions.forEach(def => {
     const wall = new Wall(def)
@@ -272,21 +276,20 @@ function createWalls(): EntityMap<Wall> {
 }
 
 export function initializeSocket(httpServer: HttpServer) {
-  // noServer: true — we route upgrade events manually below so that
-  // non-game paths (e.g. /_next/webpack-hmr) are NOT rejected with 400.
-  // The default { server, path } mode rejects every non-matching upgrade,
-  // which kills Next.js's HMR WebSocket and forces full page reloads.
+  // noServer: true — route upgrade events manually so non-game paths
+  // (e.g. /_next/webpack-hmr) are NOT rejected with HTTP 400.
   const wss = new WebSocketServer({ noServer: true })
 
   httpServer.on('upgrade', (req, socket, head) => {
     const path = (req.url ?? '').split('?')[0]
-    if (path !== '/ws') return  // leave HMR and any other WS for Next.js
+    if (path !== '/ws') return
     wss.handleUpgrade(req, socket as import('stream').Duplex, head, ws => {
       wss.emit('connection', ws, req)
     })
   })
+
   const clients = new Map<string, WebSocket>()
-  const rooms = new Map<string, Set<string>>()
+  const rooms   = new Map<string, Set<string>>()
 
   function send(ws: WebSocket, type: string, payload: Record<string, unknown> = {}) {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, ...payload }))
@@ -315,9 +318,9 @@ export function initializeSocket(httpServer: HttpServer) {
   }
 
   const gameState: GameState = {
-    players: {},
-    bullets: {},
-    walls: createWalls(),
+    players:    {},
+    bullets:    {},
+    walls:      createWalls(),
     lobbyRooms: {},
     matchStart: Date.now(),
   }
@@ -343,9 +346,9 @@ export function initializeSocket(httpServer: HttpServer) {
 
       switch (msg.type) {
         case SOCKET_EVENTS.JOIN_LOBBY: {
-          const room = (typeof msg.room === 'string' ? msg.room.trim() : '') || 'default'
+          const room     = (typeof msg.room     === 'string' ? msg.room.trim()     : '') || 'default'
           const nickname = (typeof msg.nickname === 'string' ? msg.nickname.trim().slice(0, 10) : '') || 'Player'
-          const roomSet = rooms.get(room) ?? new Set<string>()
+          const roomSet  = rooms.get(room) ?? new Set<string>()
           roomSet.add(socketId)
           rooms.set(room, roomSet)
           const members = gameState.lobbyRooms[room] ?? []
@@ -355,7 +358,7 @@ export function initializeSocket(httpServer: HttpServer) {
         }
         case SOCKET_EVENTS.GAME_START: {
           const nickname = (typeof msg.nickname === 'string' ? msg.nickname.trim().slice(0, 10) : '') || 'Player'
-          const room = (typeof msg.room === 'string' ? msg.room.trim() : '') || 'default'
+          const room     = (typeof msg.room     === 'string' ? msg.room.trim()     : '') || 'default'
           if (player) delete gameState.players[player.id]
           player = new Player({ socketId, nickname }, gameState.walls)
           const roomSet = rooms.get(room) ?? new Set<string>()
@@ -369,9 +372,9 @@ export function initializeSocket(httpServer: HttpServer) {
           if (!player || player.health <= 0 || player.spectating) break
           player.movement = {
             forward: Boolean(msg.forward),
-            back: Boolean(msg.back),
-            left: Boolean(msg.left),
-            right: Boolean(msg.right),
+            back:    Boolean(msg.back),
+            left:    Boolean(msg.left),
+            right:   Boolean(msg.right),
           }
           break
         }
@@ -382,7 +385,7 @@ export function initializeSocket(httpServer: HttpServer) {
         }
         case SOCKET_EVENTS.CHAT_MESSAGE: {
           const nickname = (typeof msg.nickname === 'string' ? msg.nickname.trim() : 'Player').slice(0, 10)
-          const message = (typeof msg.message === 'string' ? msg.message.trim() : '').slice(0, 140)
+          const message  = (typeof msg.message  === 'string' ? msg.message.trim()  : '').slice(0, 140)
           if (!message) break
           broadcast(SOCKET_EVENTS.CHAT_MESSAGE, { nickname, message })
           break
@@ -390,7 +393,7 @@ export function initializeSocket(httpServer: HttpServer) {
         case SOCKET_EVENTS.SPECTATE_MODE: {
           if (!player) break
           player.spectating = Boolean(msg.enabled)
-          player.movement = {}
+          player.movement   = {}
           break
         }
       }
@@ -415,13 +418,15 @@ export function initializeSocket(httpServer: HttpServer) {
   })
 
   const loop = setInterval(() => {
+    // ── Movement ──────────────────────────────────────────────────────────────
     for (const p of Object.values(gameState.players)) {
       if (p.movement.forward) p.move(20, gameState.walls)
-      if (p.movement.back) p.move(-20, gameState.walls)
-      if (p.movement.left) p.angle -= 0.05
-      if (p.movement.right) p.angle += 0.05
+      if (p.movement.back)    p.move(-20, gameState.walls)
+      if (p.movement.left)    p.angle -= 0.05
+      if (p.movement.right)   p.angle += 0.05
     }
 
+    // ── Bullet physics + collision ────────────────────────────────────────────
     for (const bullet of Object.values(gameState.bullets)) {
       if (!bullet.move(50, gameState.walls)) {
         bullet.remove(gameState)
@@ -438,19 +443,37 @@ export function initializeSocket(httpServer: HttpServer) {
       }
     }
 
+    // ── Round timer ───────────────────────────────────────────────────────────
+    const elapsed   = Math.floor((Date.now() - gameState.matchStart) / 1000)
+    const remaining = Math.max(0, ROUND_DURATION - elapsed)
+
+    // Round end — fires once (matchStart reset immediately prevents re-trigger)
+    if (elapsed >= ROUND_DURATION) {
+      const allPlayers = Object.values(gameState.players)
+      const sorted     = [...allPlayers].sort((a, b) => b.point - a.point)
+      const winner     = sorted[0]?.nickname ?? 'Nobody'
+      const scores     = sorted.map(p => ({ nickname: p.nickname, point: p.point }))
+
+      broadcast(SOCKET_EVENTS.ROUND_END, { winner, scores })
+
+      // Reset round — resets matchStart first so next tick sees elapsed ≈ 0
+      gameState.matchStart = Date.now()
+      for (const p of allPlayers) p.point = 0
+    }
+
+    // ── Broadcast state ───────────────────────────────────────────────────────
     const players = Object.values(gameState.players).map(p => p.toJSON())
     const bullets = Object.values(gameState.bullets).map(b => b.toJSON())
-    const walls = Object.values(gameState.walls).map(w => w.toJSON())
-    const seconds = Math.floor((Date.now() - gameState.matchStart) / 1000)
+    const walls   = Object.values(gameState.walls).map(w => w.toJSON())
     const roomIds = Object.keys(gameState.lobbyRooms)
 
     if (roomIds.length === 0) {
-      broadcast(SOCKET_EVENTS.STATE, { players, bullets, walls })
-      broadcast(SOCKET_EVENTS.MATCH_TIMER, { seconds })
+      broadcast(SOCKET_EVENTS.STATE,       { players, bullets, walls })
+      broadcast(SOCKET_EVENTS.MATCH_TIMER, { remaining })
     } else {
       for (const roomId of roomIds) {
-        broadcastToRoom(roomId, SOCKET_EVENTS.STATE, { players, bullets, walls })
-        broadcastToRoom(roomId, SOCKET_EVENTS.MATCH_TIMER, { seconds })
+        broadcastToRoom(roomId, SOCKET_EVENTS.STATE,       { players, bullets, walls })
+        broadcastToRoom(roomId, SOCKET_EVENTS.MATCH_TIMER, { remaining })
       }
     }
   }, TICK_RATE)

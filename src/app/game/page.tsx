@@ -5,10 +5,26 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SharkTankCanvas } from "@/components/game/shark-tank-canvas";
 import { MobileControls } from "@/components/game/mobile-controls";
-import { GameStats, GameSettings, GameFeed, Leaderboard } from "@/components/ui/game-ui";
+import {
+  GameStats,
+  GameSettings,
+  GameFeed,
+  MatchTimer,
+  Leaderboard,
+  RoundEndOverlay,
+} from "@/components/ui/game-ui";
 import { useSocket } from "@/components/socket-provider";
 import { type BulletState, type Movement, type PlayerState } from "@/lib/game-types";
 import { SOCKET_EVENTS } from "@/lib/socket";
+import {
+  playShoot,
+  playHit,
+  playDeath,
+  playJoin,
+  playRoundEnd,
+  toggleMute,
+  isMuted,
+} from "@/lib/game-sounds";
 
 const DEFAULT_MOVEMENT: Movement = { forward: false, back: false, left: false, right: false };
 
@@ -66,6 +82,11 @@ function DisconnectOverlay({ onReconnect }: { onReconnect: () => void }) {
   );
 }
 
+type RoundEndData = {
+  winner: string;
+  scores: Array<{ nickname: string; point: number }>;
+};
+
 export default function GamePage() {
   const router = useRouter();
   const socket = useSocket();
@@ -78,6 +99,9 @@ export default function GamePage() {
   const [isDead, setIsDead]                 = useState(false);
   const [isDisconnected, setIsDisconnected] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [remainingTime, setRemainingTime]   = useState(180);
+  const [roundEnd, setRoundEnd]             = useState<RoundEndData | null>(null);
+  const [muted, setMuted]                   = useState(false);
 
   const pressedKeys = useRef<Set<string>>(new Set());
 
@@ -94,6 +118,18 @@ export default function GamePage() {
     setIsDead(false);
     socket?.emit(SOCKET_EVENTS.GAME_START, { nickname });
   };
+
+  const handleToggleMute = () => {
+    const nowMuted = toggleMute();
+    setMuted(nowMuted);
+  };
+
+  // Auto-dismiss round-end overlay after 8 seconds
+  useEffect(() => {
+    if (!roundEnd) return;
+    const t = setTimeout(() => setRoundEnd(null), 8000);
+    return () => clearTimeout(t);
+  }, [roundEnd]);
 
   // Socket event handlers
   useEffect(() => {
@@ -113,15 +149,31 @@ export default function GamePage() {
       }
     };
 
-    const onJoin    = ({ nicknames = [] }: { nicknames?: string[] }) =>
+    const onJoin = ({ nicknames = [] }: { nicknames?: string[] }) => {
       pushFeed(`${nicknames.join(", ") || "Someone"} joined`);
+      playJoin();
+    };
 
-    const onDeath   = ({ nickname }: { nickname?: string }) =>
+    const onDeath = ({ nickname }: { nickname?: string }) => {
       pushFeed(`${nickname || "Someone"} was destroyed`);
+      playHit();
+    };
 
-    const onDead    = () => { pushFeed("You were destroyed"); setIsDead(true); };
+    const onDead = () => {
+      pushFeed("You were destroyed");
+      playDeath();
+      setIsDead(true);
+    };
 
-    const onCount   = ({ count = 0 }: { count?: number }) => setActivePlayers(count);
+    const onCount = ({ count = 0 }: { count?: number }) => setActivePlayers(count);
+
+    const onTimer = ({ remaining = 180 }: { remaining?: number }) =>
+      setRemainingTime(remaining);
+
+    const onRoundEnd = ({ winner = "", scores = [] }: { winner?: string; scores?: RoundEndData["scores"] }) => {
+      setRoundEnd({ winner, scores });
+      playRoundEnd();
+    };
 
     const onDisconnect = () => setIsDisconnected(true);
 
@@ -130,6 +182,8 @@ export default function GamePage() {
     socket.on(SOCKET_EVENTS.UPDATED_PLAYER_LIST, onDeath);
     socket.on(SOCKET_EVENTS.DEAD,                onDead);
     socket.on(SOCKET_EVENTS.UPDATED_USER_LIST,   onCount);
+    socket.on(SOCKET_EVENTS.MATCH_TIMER,         onTimer);
+    socket.on(SOCKET_EVENTS.ROUND_END,           onRoundEnd);
     socket.on("disconnect",                      onDisconnect);
 
     socket.emit(SOCKET_EVENTS.GAME_START, { nickname });
@@ -140,6 +194,8 @@ export default function GamePage() {
       socket.off(SOCKET_EVENTS.UPDATED_PLAYER_LIST, onDeath);
       socket.off(SOCKET_EVENTS.DEAD,                onDead);
       socket.off(SOCKET_EVENTS.UPDATED_USER_LIST,   onCount);
+      socket.off(SOCKET_EVENTS.MATCH_TIMER,         onTimer);
+      socket.off(SOCKET_EVENTS.ROUND_END,           onRoundEnd);
       socket.off("disconnect",                      onDisconnect);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,7 +209,6 @@ export default function GamePage() {
     const emit = () => socket.emit(SOCKET_EVENTS.MOVEMENT, movement);
 
     const onKeyDown = (e: KeyboardEvent) => {
-      // Tab toggles the leaderboard; don't pass it to the browser
       if (e.key === "Tab") {
         e.preventDefault();
         setShowLeaderboard((v) => !v);
@@ -166,7 +221,11 @@ export default function GamePage() {
 
       const dir = mapKeyToMovement(e.key);
       if (dir) { movement[dir] = true; emit(); return; }
-      if (e.code === "Space" || key === "x") socket.emit(SOCKET_EVENTS.SHOOT);
+
+      if (e.code === "Space" || key === "x") {
+        socket.emit(SOCKET_EVENTS.SHOOT);
+        playShoot();
+      }
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
@@ -205,15 +264,25 @@ export default function GamePage() {
         />
       </div>
 
-      {/* Top-right: event feed (always visible) + quality setting (desktop only) */}
+      {/* Top-center: round countdown */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40">
+        <MatchTimer remaining={remainingTime} />
+      </div>
+
+      {/* Top-right: event feed + settings (desktop) */}
       <div className="absolute top-3 right-3 z-40 flex flex-col items-end gap-2">
         <GameFeed feed={feed} />
         <div className="hidden md:block">
-          <GameSettings quality={quality} onQualityChange={setQuality} />
+          <GameSettings
+            quality={quality}
+            onQualityChange={setQuality}
+            muted={muted}
+            onToggleMute={handleToggleMute}
+          />
         </div>
       </div>
 
-      {/* Scoreboard button — mobile only (desktop uses Tab key) */}
+      {/* Scoreboard button — mobile only */}
       <button
         onClick={() => setShowLeaderboard((v) => !v)}
         className="absolute bottom-3 left-3 z-40 md:hidden bg-black/60 backdrop-blur-sm border border-white/10 rounded px-3 py-1.5 text-[10px] tracking-widest uppercase text-slate-400 hover:text-white transition-colors"
@@ -231,7 +300,7 @@ export default function GamePage() {
       {/* Mobile controls */}
       <MobileControls
         onMovementChange={(m) => socket?.emit(SOCKET_EVENTS.MOVEMENT, m)}
-        onShoot={() => socket?.emit(SOCKET_EVENTS.SHOOT)}
+        onShoot={() => { socket?.emit(SOCKET_EVENTS.SHOOT); playShoot(); }}
       />
 
       {/* Leaderboard overlay */}
@@ -240,6 +309,17 @@ export default function GamePage() {
           players={players}
           localSocketId={socket?.id}
           onClose={() => setShowLeaderboard(false)}
+        />
+      )}
+
+      {/* Round-end overlay */}
+      {roundEnd && (
+        <RoundEndOverlay
+          winner={roundEnd.winner}
+          scores={roundEnd.scores}
+          players={players}
+          localSocketId={socket?.id}
+          onClose={() => setRoundEnd(null)}
         />
       )}
 
