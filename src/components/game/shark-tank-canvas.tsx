@@ -5,11 +5,16 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Text, useGLTF, useTexture } from "@react-three/drei";
 import { Suspense } from "react";
 import type { Group, Mesh } from "three";
-import { Vector3, CubeTextureLoader, PCFShadowMap } from "three";
+import { Vector3, CubeTextureLoader, PCFShadowMap, MathUtils } from "three";
 import type { BulletState, PlayerState } from "@/lib/game-types";
 
+// Server tick period in seconds — interpolation runs over exactly one tick
+const TICK_S = 0.05;
+
+const { lerp } = MathUtils;
+
 // Stable shadow config — inline object would create a new reference each render,
-// causing R3F to re-apply shadow settings and trigger the deprecation warning.
+// causing R3F to re-apply renderer settings and trigger deprecation warnings.
 const SHADOW_CONFIG = { type: PCFShadowMap };
 
 // Module-level preloads — must be outside components (drei requirement)
@@ -44,6 +49,35 @@ function Skybox() {
   return null;
 }
 
+// Interpolation state shape — reused by tanks, bullets, and camera
+type Interp2D = { fromX: number; fromY: number; toX: number; toY: number; t: number };
+
+function makeInterp(x: number, y: number): Interp2D {
+  return { fromX: x, fromY: y, toX: x, toY: y, t: 1 };
+}
+
+// Advance a 2D interpolator each frame.
+// When toX/toY change (new server snapshot), restart from the current visual pos.
+function stepInterp(
+  interp: Interp2D,
+  serverX: number,
+  serverY: number,
+  delta: number,
+): [number, number] {
+  if (serverX !== interp.toX || serverY !== interp.toY) {
+    interp.fromX = lerp(interp.fromX, interp.toX, interp.t);
+    interp.fromY = lerp(interp.fromY, interp.toY, interp.t);
+    interp.toX = serverX;
+    interp.toY = serverY;
+    interp.t = 0;
+  }
+  interp.t = Math.min(interp.t + delta / TICK_S, 1);
+  return [
+    lerp(interp.fromX, interp.toX, interp.t),
+    lerp(interp.fromY, interp.toY, interp.t),
+  ];
+}
+
 function TankModel({
   player,
   isLocalPlayer,
@@ -55,14 +89,16 @@ function TankModel({
   const { scene: gltfScene } = useGLTF("/models/tank4.glb");
   const clonedScene = useMemo(() => gltfScene.clone(), [gltfScene]);
 
-  useFrame(() => {
+  // Client-side position interpolation — smooths the 20 Hz server snapshots
+  // into per-frame movement so there is no visible snap/jitter during movement.
+  const interp = useRef<Interp2D>(makeInterp(player.x, player.y));
+
+  useFrame((_, delta) => {
     if (!meshRef.current) return;
-    meshRef.current.position.set(
-      player.x + player.width / 2,
-      player.height / 2,
-      player.y + player.height / 2,
-    );
-    meshRef.current.rotation.y = -player.angle;
+    const { x, y, width, height, angle } = player;
+    const [ix, iy] = stepInterp(interp.current, x, y, delta);
+    meshRef.current.position.set(ix + width / 2, height / 2, iy + height / 2);
+    meshRef.current.rotation.y = -angle;
   });
 
   const healthHearts = "❤️".repeat(Math.max(0, player.health));
@@ -117,12 +153,16 @@ function WallMesh({ wall }: { wall: (typeof WALLS)[0] }) {
 
 function BulletMesh({ bullet, isOwn }: { bullet: BulletState; isOwn: boolean }) {
   const meshRef = useRef<Mesh>(null);
-  const color   = isOwn ? "#ff6b6b" : "#4ecdc4";
+  const color    = isOwn ? "#ff6b6b" : "#4ecdc4";
   const emissive = isOwn ? "#ff0000" : "#00ffff";
 
-  useFrame(() => {
+  // Bullets also snap at 20 Hz — interpolate for smooth trajectories
+  const interp = useRef<Interp2D>(makeInterp(bullet.x, bullet.y));
+
+  useFrame((_, delta) => {
     if (!meshRef.current) return;
-    meshRef.current.position.set(bullet.x, 25, bullet.y);
+    const [ix, iy] = stepInterp(interp.current, bullet.x, bullet.y, delta);
+    meshRef.current.position.set(ix, 25, iy);
     meshRef.current.rotation.x += 0.1;
     meshRef.current.rotation.y += 0.1;
   });
@@ -149,22 +189,26 @@ function CameraController({ localPlayer }: { localPlayer?: PlayerState }) {
   const { camera } = useThree();
   const camPos = useRef(new Vector3(1000, 300, 1000));
 
-  useFrame(() => {
+  // Camera follows an interpolated player position, not the raw server snapshot,
+  // so the look-at target is smooth and doesn't jerk every 50 ms.
+  const interp = useRef<Interp2D | null>(null);
+
+  useFrame((_, delta) => {
     if (!localPlayer) return;
 
     const px = localPlayer.x + localPlayer.width / 2;
     const pz = localPlayer.y + localPlayer.height / 2;
+
+    // Lazily initialise on first frame (player not available at component creation)
+    if (!interp.current) interp.current = makeInterp(px, pz);
+
+    const [ix, iz] = stepInterp(interp.current, px, pz, delta);
     const { angle } = localPlayer;
 
-    _camTarget.set(
-      px - 150 * Math.cos(angle),
-      200,
-      pz - 150 * Math.sin(angle),
-    );
-
-    camPos.current.lerp(_camTarget, 0.05);
+    _camTarget.set(ix - 150 * Math.cos(angle), 200, iz - 150 * Math.sin(angle));
+    camPos.current.lerp(_camTarget, 0.1);
     camera.position.copy(camPos.current);
-    camera.lookAt(px, 50, pz);
+    camera.lookAt(ix, 50, iz);
   });
 
   return null;
@@ -252,7 +296,7 @@ export function SharkTankCanvas({
   );
 
   // Memoize all Canvas props — new object/array references on every render
-  // cause R3F to re-apply renderer settings, which triggers Three.js warnings.
+  // cause R3F to re-apply renderer settings and trigger Three.js warnings.
   const dpr = useMemo<[number, number]>(
     () =>
       quality === "high"   ? [1, 2]   :
