@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SharkTankCanvas } from "@/components/game/shark-tank-canvas";
 import { MobileControls } from "@/components/game/mobile-controls";
-import { GameStats, GameSettings, GameFeed } from "@/components/ui/game-ui";
+import { GameStats, GameSettings, GameFeed, Leaderboard } from "@/components/ui/game-ui";
 import { useSocket } from "@/components/socket-provider";
 import { type BulletState, type Movement, type PlayerState } from "@/lib/game-types";
 import { SOCKET_EVENTS } from "@/lib/socket";
@@ -22,13 +22,7 @@ function mapKeyToMovement(key: string): keyof Movement | null {
   }
 }
 
-function DeathOverlay({
-  onRespawn,
-  onLobby,
-}: {
-  onRespawn: () => void;
-  onLobby: () => void;
-}) {
+function DeathOverlay({ onRespawn, onLobby }: { onRespawn: () => void; onLobby: () => void }) {
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
       <div className="flex flex-col items-center gap-6 rounded-xl border border-red-800 bg-black/90 px-10 py-8 text-center shadow-2xl">
@@ -83,6 +77,7 @@ export default function GamePage() {
   const [quality, setQuality]               = useState<"high" | "medium" | "low">("high");
   const [isDead, setIsDead]                 = useState(false);
   const [isDisconnected, setIsDisconnected] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   const pressedKeys = useRef<Set<string>>(new Set());
 
@@ -104,6 +99,9 @@ export default function GamePage() {
   useEffect(() => {
     if (!socket) return;
 
+    const pushFeed = (msg: string) =>
+      setFeed((prev) => [...prev.slice(-9), msg]);
+
     const onState = (payload: Record<string, unknown>) => {
       const { players: p, bullets: b } = payload as {
         players: PlayerState[];
@@ -114,9 +112,6 @@ export default function GamePage() {
         setBullets(b ?? []);
       }
     };
-
-    const pushFeed = (msg: string) =>
-      setFeed((prev) => [...prev.slice(-9), msg]);
 
     const onJoin    = ({ nicknames = [] }: { nicknames?: string[] }) =>
       pushFeed(`${nicknames.join(", ") || "Someone"} joined`);
@@ -150,7 +145,7 @@ export default function GamePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket]);
 
-  // Keyboard input
+  // Keyboard input — movement + Tab for leaderboard
   useEffect(() => {
     if (!socket) return;
 
@@ -158,6 +153,13 @@ export default function GamePage() {
     const emit = () => socket.emit(SOCKET_EVENTS.MOVEMENT, movement);
 
     const onKeyDown = (e: KeyboardEvent) => {
+      // Tab toggles the leaderboard; don't pass it to the browser
+      if (e.key === "Tab") {
+        e.preventDefault();
+        setShowLeaderboard((v) => !v);
+        return;
+      }
+
       const key = e.key.toLowerCase();
       if (pressedKeys.current.has(key)) return;
       pressedKeys.current.add(key);
@@ -211,11 +213,35 @@ export default function GamePage() {
         </div>
       </div>
 
+      {/* Scoreboard button — mobile only (desktop uses Tab key) */}
+      <button
+        onClick={() => setShowLeaderboard((v) => !v)}
+        className="absolute bottom-3 left-3 z-40 md:hidden bg-black/60 backdrop-blur-sm border border-white/10 rounded px-3 py-1.5 text-[10px] tracking-widest uppercase text-slate-400 hover:text-white transition-colors"
+      >
+        Scores
+      </button>
+
+      {/* Desktop Tab hint */}
+      <div className="absolute bottom-3 left-3 z-40 hidden md:block pointer-events-none">
+        <span className="text-[10px] tracking-widest uppercase text-slate-600">
+          Tab — scoreboard
+        </span>
+      </div>
+
       {/* Mobile controls */}
       <MobileControls
         onMovementChange={(m) => socket?.emit(SOCKET_EVENTS.MOVEMENT, m)}
         onShoot={() => socket?.emit(SOCKET_EVENTS.SHOOT)}
       />
+
+      {/* Leaderboard overlay */}
+      {showLeaderboard && (
+        <Leaderboard
+          players={players}
+          localSocketId={socket?.id}
+          onClose={() => setShowLeaderboard(false)}
+        />
+      )}
 
       {isDead && (
         <DeathOverlay

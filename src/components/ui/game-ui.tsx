@@ -1,6 +1,7 @@
 "use client";
 
 import { Progress } from "@/components/ui/progress";
+import type { PlayerState } from "@/lib/game-types";
 
 // ─── Game Stats (top-left HUD) ───────────────────────────────────────────────
 
@@ -62,8 +63,6 @@ export function GameSettings({ quality, onQualityChange }: GameSettingsProps) {
 }
 
 // ─── Event Feed (top-right HUD) ───────────────────────────────────────────────
-// Each event is its own floating pill — right-aligned so newest entries
-// sit near the screen edge and never overlap with game-play UI.
 
 interface GameFeedProps {
   feed: string[];
@@ -77,9 +76,7 @@ function feedColor(msg: string): string {
 }
 
 export function GameFeed({ feed }: GameFeedProps) {
-  // Show newest 5, newest at the bottom
   const visible = feed.slice(-5);
-
   return (
     <div className="flex flex-col items-end gap-1 pointer-events-none">
       {visible.map((item, i) => (
@@ -90,6 +87,78 @@ export function GameFeed({ feed }: GameFeedProps) {
           {item}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Leaderboard overlay (Tab-toggled) ───────────────────────────────────────
+
+interface LeaderboardProps {
+  players: PlayerState[];
+  localSocketId?: string;
+  onClose: () => void;
+}
+
+export function Leaderboard({ players, localSocketId, onClose }: LeaderboardProps) {
+  const sorted = [...players].sort((a, b) => b.point - a.point);
+
+  return (
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center"
+      onClick={onClose}
+    >
+      {/* Panel — stop click-through */}
+      <div
+        className="bg-black/90 backdrop-blur-md rounded-lg border border-white/10 w-80 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+          <span className="text-xs font-bold tracking-widest uppercase text-slate-400">
+            Scoreboard
+          </span>
+          <span className="text-[10px] text-slate-600 tracking-widest uppercase">Tab to close</span>
+        </div>
+
+        {/* Column labels */}
+        <div className="flex items-center gap-3 px-4 py-1.5 border-b border-white/5">
+          <span className="w-5 text-right text-[10px] text-slate-600">#</span>
+          <span className="flex-1 text-[10px] tracking-widest uppercase text-slate-600">Player</span>
+          <span className="text-[10px] tracking-widest uppercase text-slate-600">Kills</span>
+        </div>
+
+        {/* Rows */}
+        <div className="divide-y divide-white/5 max-h-80 overflow-y-auto">
+          {sorted.length === 0 && (
+            <div className="px-4 py-4 text-xs text-slate-500 text-center">
+              No players yet
+            </div>
+          )}
+          {sorted.map((p, i) => {
+            const isLocal = p.socketId === localSocketId;
+            const isBot   = !p.socketId;
+            return (
+              <div
+                key={p.id}
+                className={`flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
+                  isLocal ? "bg-[#00ff88]/10" : ""
+                }`}
+              >
+                <span className="w-5 text-right text-slate-500 text-xs font-mono">{i + 1}</span>
+                <span
+                  className={`flex-1 font-medium truncate ${
+                    isLocal ? "text-[#00ff88]" : isBot ? "text-slate-400" : "text-white"
+                  }`}
+                >
+                  {p.nickname}
+                  {isBot && <span className="ml-1.5 text-[10px] text-slate-600 font-normal">BOT</span>}
+                </span>
+                <span className="text-white font-mono text-sm font-bold">{p.point}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

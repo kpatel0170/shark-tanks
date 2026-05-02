@@ -174,9 +174,58 @@ class BotPlayer extends Player {
 
   constructor(props: { nickname: string }, walls: EntityMap<Wall>, gameState: GameState) {
     super(props, walls)
+
     this.timer = setInterval(() => {
-      if (!this.move(4, gameState.walls)) this.angle = Math.random() * Math.PI * 2
-      if (Math.random() < 0.03) this.shoot(gameState)
+      // Find the nearest living human player
+      const humans = Object.values(gameState.players).filter(
+        p => p !== this && !(p instanceof BotPlayer) && !p.spectating && p.health > 0
+      )
+
+      if (humans.length > 0) {
+        // Pick closest by Euclidean distance
+        const nearest = humans.reduce((best, p) => {
+          const d  = (p.x - this.x) ** 2 + (p.y - this.y) ** 2
+          const db = (best.x - this.x) ** 2 + (best.y - this.y) ** 2
+          return d < db ? p : best
+        })
+
+        const cx = this.x + this.width  / 2
+        const cy = this.y + this.height / 2
+        const tx = nearest.x + nearest.width  / 2
+        const ty = nearest.y + nearest.height / 2
+
+        const dx   = tx - cx
+        const dy   = ty - cy
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        const targetAngle = Math.atan2(dy, dx)
+
+        // Shortest-path angle difference
+        let diff = ((targetAngle - this.angle) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI
+
+        // Rotate toward target at a fixed turn rate
+        const TURN_RATE = 0.07
+        if (Math.abs(diff) > TURN_RATE) {
+          this.angle += Math.sign(diff) * TURN_RATE
+        } else {
+          this.angle = targetAngle
+        }
+
+        // Move forward when roughly aimed (within ~23°) — back off if too close
+        if (Math.abs(diff) < 0.4) {
+          if (dist > 200) {
+            if (!this.move(5, gameState.walls)) this.angle += Math.PI / 3
+          }
+        }
+
+        // Shoot when in range and well-aimed (within ~11°)
+        if (dist < 900 && Math.abs(diff) < 0.2) {
+          this.shoot(gameState)
+        }
+      } else {
+        // No humans — roam randomly
+        if (!this.move(4, gameState.walls)) this.angle = Math.random() * Math.PI * 2
+        if (Math.random() < 0.02) this.shoot(gameState)
+      }
     }, TICK_RATE)
   }
 
@@ -273,8 +322,12 @@ export function initializeSocket(httpServer: HttpServer) {
     matchStart: Date.now(),
   }
 
-  const bot = new BotPlayer({ nickname: 'Karthick' }, gameState.walls, gameState)
-  gameState.players[bot.id] = bot
+  const BOT_NAMES = ['Karthick', 'Stacy', 'Rex']
+  const bots = BOT_NAMES.map(nickname => {
+    const b = new BotPlayer({ nickname }, gameState.walls, gameState)
+    gameState.players[b.id] = b
+    return b
+  })
 
   wss.on('connection', ws => {
     const socketId = randomUUID()
@@ -404,7 +457,7 @@ export function initializeSocket(httpServer: HttpServer) {
 
   return () => {
     clearInterval(loop)
-    bot.cleanup()
+    bots.forEach(b => b.cleanup())
     wss.removeAllListeners()
     wss.close()
   }
