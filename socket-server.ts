@@ -223,7 +223,19 @@ function createWalls(): EntityMap<Wall> {
 }
 
 export function initializeSocket(httpServer: HttpServer) {
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' })
+  // noServer: true — we route upgrade events manually below so that
+  // non-game paths (e.g. /_next/webpack-hmr) are NOT rejected with 400.
+  // The default { server, path } mode rejects every non-matching upgrade,
+  // which kills Next.js's HMR WebSocket and forces full page reloads.
+  const wss = new WebSocketServer({ noServer: true })
+
+  httpServer.on('upgrade', (req, socket, head) => {
+    const path = (req.url ?? '').split('?')[0]
+    if (path !== '/ws') return  // leave HMR and any other WS for Next.js
+    wss.handleUpgrade(req, socket as import('stream').Duplex, head, ws => {
+      wss.emit('connection', ws, req)
+    })
+  })
   const clients = new Map<string, WebSocket>()
   const rooms = new Map<string, Set<string>>()
 
