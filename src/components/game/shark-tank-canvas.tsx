@@ -127,37 +127,38 @@ function TankLabel({
   isLocalPlayer: boolean;
 }) {
   const pct      = maxHealth > 0 ? Math.max(0, health) / maxHealth : 0;
-  const BAR_W    = 90;
-  const BAR_H    = 7;
+  const BAR_W    = 55;
+  const BAR_H    = 5;
   const fillW    = Math.max(1, BAR_W * pct);
-  const barColor = pct > 0.6 ? "#00ff88" : pct > 0.3 ? "#ffcc00" : "#ff4444";
+  // Yellow → orange → red as health drops
+  const barColor = pct > 0.6 ? "#ffdd00" : pct > 0.3 ? "#ff8800" : "#ff3333";
   const nameColor = isLocalPlayer ? "#00ff88" : "#ffffff";
 
   return (
     // Billboard rotates children to face the camera every frame —
     // no manual rotation needed, no mirroring at any angle.
-    <Billboard position={[0, 130, 0]}>
-      {/* Nickname */}
+    <Billboard position={[0, 78, 0]}>
+      {/* Nickname — compact, close to tank top */}
       <Text
-        fontSize={16}
+        fontSize={12}
         color={nameColor}
         anchorX="center"
         anchorY="bottom"
-        position={[0, 6, 0]}
-        outlineWidth={1.5}
+        position={[0, 4, 0]}
+        outlineWidth={1}
         outlineColor="#000000"
         outlineOpacity={1}
       >
         {nickname}
       </Text>
 
-      {/* Health bar — dark track */}
+      {/* Health bar — visible mid-grey track so empty space reads clearly */}
       <mesh position={[0, -4, 0]}>
         <planeGeometry args={[BAR_W, BAR_H]} />
-        <meshBasicMaterial color="#111111" transparent opacity={0.85} depthTest={false} />
+        <meshBasicMaterial color="#555555" transparent opacity={0.9} depthTest={false} />
       </mesh>
 
-      {/* Health bar — coloured fill, anchored to left edge */}
+      {/* Health bar — bright fill, anchored to left edge */}
       <mesh position={[(fillW - BAR_W) / 2, -4, 0.1]}>
         <planeGeometry args={[fillW, BAR_H]} />
         <meshBasicMaterial color={barColor} depthTest={false} />
