@@ -1,6 +1,7 @@
-import { Server, type Socket } from 'socket.io'
+import { WebSocketServer, WebSocket } from 'ws'
 import type { Server as HttpServer } from 'http'
-import { SOCKET_EVENTS, SOCKET_PATH } from './src/lib/socket'
+import { randomUUID } from 'crypto'
+import { SOCKET_EVENTS } from './src/lib/socket'
 
 type Movement = {
   forward?: boolean
@@ -11,19 +12,18 @@ type Movement = {
 
 type EntityMap<T extends { id: number }> = Record<number, T>
 
-type ChatPayload = {
-  nickname?: string
-  message?: string
-}
-
 type LobbyMember = {
   socketId: string
   nickname: string
 }
 
-const GROUND_MIN = -2500
-const GROUND_MAX = 2500
-const TICK_RATE = 1000 / 20
+type Broadcast = (type: string, payload?: Record<string, unknown>) => void
+type SendTo = (socketId: string, type: string, payload?: Record<string, unknown>) => void
+
+const GROUND_MIN     = -2500
+const GROUND_MAX     = 2500
+const TICK_RATE      = 1000 / 20
+const ROUND_DURATION = 180   // seconds — 3-minute rounds
 
 class GameObject {
   public id: number
@@ -34,12 +34,12 @@ class GameObject {
   public angle: number
 
   constructor(props: Partial<GameObject> = {}) {
-    this.id = Math.floor(Math.random() * 1_000_000_000)
-    this.x = props.x ?? 0
-    this.y = props.y ?? 0
-    this.width = props.width ?? 0
+    this.id     = Math.floor(Math.random() * 1_000_000_000)
+    this.x      = props.x      ?? 0
+    this.y      = props.y      ?? 0
+    this.width  = props.width  ?? 0
     this.height = props.height ?? 0
-    this.angle = props.angle ?? 0
+    this.angle  = props.angle  ?? 0
   }
 
   move(distance: number, walls: EntityMap<Wall>): boolean {
@@ -49,15 +49,13 @@ class GameObject {
     this.x += distance * Math.cos(this.angle)
     this.y += distance * Math.sin(this.angle)
 
-    const isOutOfBounds =
+    const outOfBounds =
       this.x < GROUND_MIN ||
       this.y < GROUND_MIN ||
-      this.x + this.width > GROUND_MAX ||
+      this.x + this.width  > GROUND_MAX ||
       this.y + this.height > GROUND_MAX
 
-    const collidesWall = Object.values(walls).some((wall) => this.intersects(wall))
-
-    if (isOutOfBounds || collidesWall) {
+    if (outOfBounds || Object.values(walls).some(w => this.intersects(w))) {
       this.x = previousX
       this.y = previousY
       return false
@@ -68,22 +66,15 @@ class GameObject {
 
   intersects(other: GameObject): boolean {
     return (
-      this.x <= other.x + other.width &&
-      this.x + this.width >= other.x &&
+      this.x <= other.x + other.width  &&
+      this.x + this.width  >= other.x  &&
       this.y <= other.y + other.height &&
       this.y + this.height >= other.y
     )
   }
 
   toJSON() {
-    return {
-      id: this.id,
-      x: this.x,
-      y: this.y,
-      width: this.width,
-      height: this.height,
-      angle: this.angle,
-    }
+    return { id: this.id, x: this.x, y: this.y, width: this.width, height: this.height, angle: this.angle }
   }
 }
 
@@ -94,7 +85,7 @@ class Bullet extends GameObject {
 
   constructor(props: Partial<GameObject> & { player: Player }) {
     super(props)
-    this.width = 15
+    this.width  = 15
     this.height = 15
     this.player = props.player
   }
@@ -105,88 +96,84 @@ class Bullet extends GameObject {
   }
 
   override toJSON() {
-    return {
-      ...super.toJSON(),
-      playerId: this.player.id,
-    }
+    return { ...super.toJSON(), playerId: this.player.id }
   }
 }
 
 class Player extends GameObject {
-  public socketId?: string
-  public nickname: string
-  public health: number
-  public maxHealth: number
-  public point: number
-  public bullets: EntityMap<Bullet>
-  public movement: Movement
-  public spectating: boolean
+  public socketId?:           string
+  public nickname:            string
+  public health:              number
+  public maxHealth:           number
+  public point:               number
+  public bullets:             EntityMap<Bullet>
+  public movement:            Movement
+  public spectating:          boolean
+  public spawnProtectedUntil: number   // ms timestamp — no damage before this
 
   constructor(props: { socketId?: string; nickname: string }, walls: EntityMap<Wall>) {
     super()
-    this.socketId = props.socketId
-    this.nickname = props.nickname
-    this.width = 80
-    this.height = 80
-    this.health = 10
+    this.socketId  = props.socketId
+    this.nickname  = props.nickname
+    this.width     = 80
+    this.height    = 80
+    this.health    = 10
     this.maxHealth = 10
-    this.point = 0
-    this.bullets = {}
-    this.movement = {}
+    this.point     = 0
+    this.bullets   = {}
+    this.movement  = {}
     this.spectating = false
+    // BUG FIX: was Math.random() * GROUND_MAX → only top-right quadrant.
+    // Now spans the full map (GROUND_MIN → GROUND_MAX).
+    this.spawnProtectedUntil = Date.now() + 2000
 
     do {
-      this.x = Math.random() * (GROUND_MAX - this.width)
-      this.y = Math.random() * (GROUND_MAX - this.height)
+      this.x     = GROUND_MIN + Math.random() * (GROUND_MAX - GROUND_MIN - this.width)
+      this.y     = GROUND_MIN + Math.random() * (GROUND_MAX - GROUND_MIN - this.height)
       this.angle = Math.random() * Math.PI * 2
-    } while (Object.values(walls).some((wall) => this.intersects(wall)))
+    } while (Object.values(walls).some(w => this.intersects(w)))
   }
 
   shoot(gameState: GameState) {
-    if (Object.keys(this.bullets).length >= 5 || this.spectating) {
-      return
-    }
-
+    if (Object.keys(this.bullets).length >= 5 || this.spectating) return
     const bullet = new Bullet({
-      x: this.x + this.width / 2,
+      x: this.x + this.width  / 2,
       y: this.y + this.height / 2,
       angle: this.angle,
       player: this,
     })
-
     bullet.move(this.width / 2, gameState.walls)
-    this.bullets[bullet.id] = bullet
+    this.bullets[bullet.id]    = bullet
     gameState.bullets[bullet.id] = bullet
   }
 
-  damage(io: Server, gameState: GameState) {
+  damage(broadcast: Broadcast, sendTo: SendTo, gameState: GameState) {
     if (this.spectating) return
-    this.health -= 1
+    // Spawn protection — ignore all damage for 2 seconds after spawning
+    if (Date.now() < this.spawnProtectedUntil) return
 
+    this.health -= 1
     if (this.health <= 0) {
-      if (this.socketId) {
-        io.to(this.socketId).emit(SOCKET_EVENTS.DEAD)
-      }
+      if (this.socketId) sendTo(this.socketId, SOCKET_EVENTS.DEAD)
       delete gameState.players[this.id]
-      io.emit(SOCKET_EVENTS.UPDATED_PLAYER_LIST, this.nickname)
+      broadcast(SOCKET_EVENTS.UPDATED_PLAYER_LIST, { nickname: this.nickname })
     }
   }
 
   maybeRestoreHealth() {
-    if ([20, 50, 100].includes(this.point)) {
-      this.health = this.maxHealth
-    }
+    if ([20, 50, 100].includes(this.point)) this.health = this.maxHealth
   }
 
   override toJSON() {
     return {
       ...super.toJSON(),
-      socketId: this.socketId,
-      nickname: this.nickname,
-      health: this.health,
-      maxHealth: this.maxHealth,
-      point: this.point,
-      spectating: this.spectating,
+      socketId:           this.socketId,
+      nickname:           this.nickname,
+      health:             this.health,
+      maxHealth:          this.maxHealth,
+      point:              this.point,
+      spectating:         this.spectating,
+      spawnProtected:     Date.now() < this.spawnProtectedUntil,
     }
   }
 }
@@ -198,12 +185,50 @@ class BotPlayer extends Player {
     super(props, walls)
 
     this.timer = setInterval(() => {
-      if (!this.move(4, gameState.walls)) {
-        this.angle = Math.random() * Math.PI * 2
-      }
+      // Find the nearest living human player
+      const humans = Object.values(gameState.players).filter(
+        p => p !== this && !(p instanceof BotPlayer) && !p.spectating && p.health > 0
+      )
 
-      if (Math.random() < 0.03) {
-        this.shoot(gameState)
+      if (humans.length > 0) {
+        const nearest = humans.reduce((best, p) => {
+          const d  = (p.x - this.x) ** 2 + (p.y - this.y) ** 2
+          const db = (best.x - this.x) ** 2 + (best.y - this.y) ** 2
+          return d < db ? p : best
+        })
+
+        const cx = this.x + this.width  / 2
+        const cy = this.y + this.height / 2
+        const tx = nearest.x + nearest.width  / 2
+        const ty = nearest.y + nearest.height / 2
+
+        const dx   = tx - cx
+        const dy   = ty - cy
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        const targetAngle = Math.atan2(dy, dx)
+
+        // Shortest-path angle difference
+        const diff = ((targetAngle - this.angle) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI
+
+        const TURN_RATE = 0.07
+        if (Math.abs(diff) > TURN_RATE) {
+          this.angle += Math.sign(diff) * TURN_RATE
+        } else {
+          this.angle = targetAngle
+        }
+
+        if (Math.abs(diff) < 0.4) {
+          if (dist > 200) {
+            if (!this.move(5, gameState.walls)) this.angle += Math.PI / 3
+          }
+        }
+
+        if (dist < 900 && Math.abs(diff) < 0.2) {
+          this.shoot(gameState)
+        }
+      } else {
+        if (!this.move(4, gameState.walls)) this.angle = Math.random() * Math.PI * 2
+        if (Math.random() < 0.02) this.shoot(gameState)
       }
     }, TICK_RATE)
   }
@@ -212,12 +237,12 @@ class BotPlayer extends Player {
     clearInterval(this.timer)
   }
 
-  override damage(io: Server, gameState: GameState) {
-    super.damage(io, gameState)
+  override damage(broadcast: Broadcast, sendTo: SendTo, gameState: GameState) {
+    super.damage(broadcast, sendTo, gameState)
     if (this.health <= 0) {
       this.cleanup()
       const { nickname } = this
-      const { walls } = gameState
+      const { walls }    = gameState
       setTimeout(() => {
         const newBot = new BotPlayer({ nickname }, walls, gameState)
         gameState.players[newBot.id] = newBot
@@ -227,189 +252,236 @@ class BotPlayer extends Player {
 }
 
 type GameState = {
-  players: EntityMap<Player>
-  bullets: EntityMap<Bullet>
-  walls: EntityMap<Wall>
+  players:    EntityMap<Player>
+  bullets:    EntityMap<Bullet>
+  walls:      EntityMap<Wall>
   lobbyRooms: Record<string, LobbyMember[]>
   matchStart: number
 }
 
 function createWalls(): EntityMap<Wall> {
   const walls: EntityMap<Wall> = {}
-  const definitions: Array<Pick<GameObject, 'x' | 'y' | 'width' | 'height'>> = [
-    { x: 0, y: 2, width: 200, height: 1000 },
-    { x: 1000, y: 100, width: 200, height: 1000 },
-    { x: 2000, y: 1000, width: 200, height: 1000 },
-    { x: -1000, y: -1000, width: 200, height: 1000 },
-    { x: -1500, y: 700, width: 200, height: 1000 },
+  const definitions = [
+    { x:    0, y:     2, width: 200, height: 1000 },
+    { x: 1000, y:   100, width: 200, height: 1000 },
+    { x: 2000, y:  1000, width: 200, height: 1000 },
+    { x:-1000, y: -1000, width: 200, height: 1000 },
+    { x:-1500, y:   700, width: 200, height: 1000 },
   ]
-
-  definitions.forEach((definition) => {
-    const wall = new Wall(definition)
+  definitions.forEach(def => {
+    const wall = new Wall(def)
     walls[wall.id] = wall
   })
-
   return walls
 }
 
-function serializeCollection<T extends { id: number; toJSON: () => object }>(collection: EntityMap<T>) {
-  return Object.fromEntries(Object.values(collection).map((entity) => [entity.id, entity.toJSON()]))
-}
-
-function emitRoomPlayers(io: Server, gameState: GameState, room: string) {
-  io.to(room).emit(SOCKET_EVENTS.PLAYERS_UPDATE, gameState.lobbyRooms[room] ?? [])
-}
-
-function removeSocketFromRooms(io: Server, gameState: GameState, socketId: string) {
-  Object.keys(gameState.lobbyRooms).forEach((room) => {
-    gameState.lobbyRooms[room] = gameState.lobbyRooms[room].filter((member) => member.socketId !== socketId)
-    emitRoomPlayers(io, gameState, room)
-  })
-}
-
 export function initializeSocket(httpServer: HttpServer) {
-  const corsOrigin = process.env.NODE_ENV === 'production'
-    ? (process.env.NEXT_PUBLIC_APP_URL ?? false)
-    : '*'
+  // noServer: true — route upgrade events manually so non-game paths
+  // (e.g. /_next/webpack-hmr) are NOT rejected with HTTP 400.
+  const wss = new WebSocketServer({ noServer: true })
 
-  const io = new Server(httpServer, {
-    path: SOCKET_PATH,
-    cors: { origin: corsOrigin },
+  httpServer.on('upgrade', (req, socket, head) => {
+    const path = (req.url ?? '').split('?')[0]
+    if (path !== '/ws') return
+    wss.handleUpgrade(req, socket as import('stream').Duplex, head, ws => {
+      wss.emit('connection', ws, req)
+    })
   })
+
+  const clients = new Map<string, WebSocket>()
+  const rooms   = new Map<string, Set<string>>()
+
+  function send(ws: WebSocket, type: string, payload: Record<string, unknown> = {}) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, ...payload }))
+  }
+
+  function sendTo(socketId: string, type: string, payload: Record<string, unknown> = {}) {
+    const ws = clients.get(socketId)
+    if (ws) send(ws, type, payload)
+  }
+
+  function broadcast(type: string, payload: Record<string, unknown> = {}) {
+    const msg = JSON.stringify({ type, ...payload })
+    for (const ws of clients.values()) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(msg)
+    }
+  }
+
+  function broadcastToRoom(roomId: string, type: string, payload: Record<string, unknown> = {}) {
+    const room = rooms.get(roomId)
+    if (!room) return
+    const msg = JSON.stringify({ type, ...payload })
+    for (const socketId of room) {
+      const ws = clients.get(socketId)
+      if (ws?.readyState === WebSocket.OPEN) ws.send(msg)
+    }
+  }
 
   const gameState: GameState = {
-    players: {},
-    bullets: {},
-    walls: createWalls(),
+    players:    {},
+    bullets:    {},
+    walls:      createWalls(),
     lobbyRooms: {},
     matchStart: Date.now(),
   }
 
-  const bot = new BotPlayer({ nickname: 'Karthick' }, gameState.walls, gameState)
-  gameState.players[bot.id] = bot
+  const BOT_NAMES = ['Karthick', 'Stacy', 'Rex']
+  const bots = BOT_NAMES.map(nickname => {
+    const b = new BotPlayer({ nickname }, gameState.walls, gameState)
+    gameState.players[b.id] = b
+    return b
+  })
 
-  io.on('connection', (socket: Socket) => {
+  wss.on('connection', ws => {
+    const socketId = randomUUID()
+    clients.set(socketId, ws)
     let player: Player | null = null
 
-    io.emit(SOCKET_EVENTS.UPDATED_USER_LIST, io.engine.clientsCount)
+    send(ws, 'connected', { id: socketId })
+    broadcast(SOCKET_EVENTS.UPDATED_USER_LIST, { count: clients.size })
 
-    socket.on(SOCKET_EVENTS.JOIN_LOBBY, (payload?: { room?: string; nickname?: string }) => {
-      const room = payload?.room?.trim() || 'default'
-      const nickname = payload?.nickname?.trim().slice(0, 10) || 'Player'
+    ws.on('message', data => {
+      let msg: Record<string, unknown>
+      try { msg = JSON.parse(data.toString()) } catch { return }
 
-      socket.join(room)
-
-      const members = gameState.lobbyRooms[room] ?? []
-      gameState.lobbyRooms[room] = [...members.filter((member) => member.socketId !== socket.id), { socketId: socket.id, nickname }]
-
-      emitRoomPlayers(io, gameState, room)
-    })
-
-    socket.on(SOCKET_EVENTS.GAME_START, (config?: { nickname?: string; room?: string }) => {
-      const nickname = (config?.nickname ?? 'Player').trim().slice(0, 10) || 'Player'
-      const room = config?.room?.trim() || 'default'
-
-      // idempotent start: remove old player for this socket before spawning a new one
-      if (player) {
-        delete gameState.players[player.id]
+      switch (msg.type) {
+        case SOCKET_EVENTS.JOIN_LOBBY: {
+          const room     = (typeof msg.room     === 'string' ? msg.room.trim()     : '') || 'default'
+          const nickname = (typeof msg.nickname === 'string' ? msg.nickname.trim().slice(0, 10) : '') || 'Player'
+          const roomSet  = rooms.get(room) ?? new Set<string>()
+          roomSet.add(socketId)
+          rooms.set(room, roomSet)
+          const members = gameState.lobbyRooms[room] ?? []
+          gameState.lobbyRooms[room] = [...members.filter(m => m.socketId !== socketId), { socketId, nickname }]
+          broadcastToRoom(room, SOCKET_EVENTS.PLAYERS_UPDATE, { members: gameState.lobbyRooms[room] })
+          break
+        }
+        case SOCKET_EVENTS.GAME_START: {
+          const nickname = (typeof msg.nickname === 'string' ? msg.nickname.trim().slice(0, 10) : '') || 'Player'
+          const room     = (typeof msg.room     === 'string' ? msg.room.trim()     : '') || 'default'
+          if (player) delete gameState.players[player.id]
+          player = new Player({ socketId, nickname }, gameState.walls)
+          const roomSet = rooms.get(room) ?? new Set<string>()
+          roomSet.add(socketId)
+          rooms.set(room, roomSet)
+          gameState.players[player.id] = player
+          broadcast(SOCKET_EVENTS.JOINING_LIST, { nicknames: [player.nickname] })
+          break
+        }
+        case SOCKET_EVENTS.MOVEMENT: {
+          if (!player || player.health <= 0 || player.spectating) break
+          player.movement = {
+            forward: Boolean(msg.forward),
+            back:    Boolean(msg.back),
+            left:    Boolean(msg.left),
+            right:   Boolean(msg.right),
+          }
+          break
+        }
+        case SOCKET_EVENTS.SHOOT: {
+          if (!player || player.health <= 0 || player.spectating) break
+          player.shoot(gameState)
+          break
+        }
+        case SOCKET_EVENTS.CHAT_MESSAGE: {
+          const nickname = (typeof msg.nickname === 'string' ? msg.nickname.trim() : 'Player').slice(0, 10)
+          const message  = (typeof msg.message  === 'string' ? msg.message.trim()  : '').slice(0, 140)
+          if (!message) break
+          broadcast(SOCKET_EVENTS.CHAT_MESSAGE, { nickname, message })
+          break
+        }
+        case SOCKET_EVENTS.SPECTATE_MODE: {
+          if (!player) break
+          player.spectating = Boolean(msg.enabled)
+          player.movement   = {}
+          break
+        }
       }
-
-      player = new Player(
-        {
-          socketId: socket.id,
-          nickname,
-        },
-        gameState.walls
-      )
-
-      socket.join(room)
-      gameState.players[player.id] = player
-      io.emit(SOCKET_EVENTS.JOINING_LIST, [player.nickname])
     })
 
-    socket.on(SOCKET_EVENTS.MOVEMENT, (movement: Movement) => {
-      if (!player || player.health <= 0 || player.spectating) return
-      player.movement = movement
-    })
-
-    socket.on(SOCKET_EVENTS.SHOOT, () => {
-      if (!player || player.health <= 0 || player.spectating) return
-      player.shoot(gameState)
-    })
-
-    socket.on(SOCKET_EVENTS.CHAT_MESSAGE, (payload: ChatPayload) => {
-      const nickname = (payload?.nickname?.trim() || 'Player').slice(0, 10)
-      const message = (payload?.message ?? '').trim().slice(0, 140)
-
-      if (!message) return
-
-      io.emit(SOCKET_EVENTS.CHAT_MESSAGE, { nickname, message })
-    })
-
-    socket.on(SOCKET_EVENTS.SPECTATE_MODE, (enabled: boolean) => {
-      if (!player) return
-      player.spectating = Boolean(enabled)
-      player.movement = {}
-    })
-
-    socket.on('disconnect', () => {
+    ws.on('close', () => {
+      clients.delete(socketId)
       if (player) {
         delete gameState.players[player.id]
         player = null
       }
-
-      removeSocketFromRooms(io, gameState, socket.id)
-      io.emit(SOCKET_EVENTS.UPDATED_USER_LIST, io.engine.clientsCount)
+      for (const [room, memberSet] of rooms) {
+        memberSet.delete(socketId)
+        const lobbyMembers = gameState.lobbyRooms[room]
+        if (lobbyMembers) {
+          gameState.lobbyRooms[room] = lobbyMembers.filter(m => m.socketId !== socketId)
+          broadcastToRoom(room, SOCKET_EVENTS.PLAYERS_UPDATE, { members: gameState.lobbyRooms[room] })
+        }
+      }
+      broadcast(SOCKET_EVENTS.UPDATED_USER_LIST, { count: clients.size })
     })
   })
 
   const loop = setInterval(() => {
-    Object.values(gameState.players).forEach((player) => {
-      if (player.movement.forward) player.move(20, gameState.walls)
-      if (player.movement.back) player.move(-20, gameState.walls)
-      if (player.movement.left) player.angle -= 0.05
-      if (player.movement.right) player.angle += 0.05
-    })
+    // ── Movement ──────────────────────────────────────────────────────────────
+    for (const p of Object.values(gameState.players)) {
+      if (p.movement.forward) p.move(20, gameState.walls)
+      if (p.movement.back)    p.move(-20, gameState.walls)
+      if (p.movement.left)    p.angle -= 0.05
+      if (p.movement.right)   p.angle += 0.05
+    }
 
-    Object.values(gameState.bullets).forEach((bullet) => {
+    // ── Bullet physics + collision ────────────────────────────────────────────
+    for (const bullet of Object.values(gameState.bullets)) {
       if (!bullet.move(50, gameState.walls)) {
         bullet.remove(gameState)
-        return
+        continue
       }
-
-      Object.values(gameState.players).forEach((target) => {
-        if (target === bullet.player || target.spectating) return
-
+      for (const target of Object.values(gameState.players)) {
+        if (target === bullet.player || target.spectating) continue
         if (bullet.intersects(target)) {
-          target.damage(io, gameState)
+          target.damage(broadcast, sendTo, gameState)
           bullet.player.point += 1
           bullet.player.maybeRestoreHealth()
           bullet.remove(gameState)
         }
-      })
-    })
+      }
+    }
 
-    const serializedPlayers = serializeCollection(gameState.players)
-    const serializedBullets = serializeCollection(gameState.bullets)
-    const serializedWalls = serializeCollection(gameState.walls)
-    const matchTimer = Math.floor((Date.now() - gameState.matchStart) / 1000)
-    const roomIds = Object.keys(gameState.lobbyRooms || {})
+    // ── Round timer ───────────────────────────────────────────────────────────
+    const elapsed   = Math.floor((Date.now() - gameState.matchStart) / 1000)
+    const remaining = Math.max(0, ROUND_DURATION - elapsed)
+
+    // Round end — fires once (matchStart reset immediately prevents re-trigger)
+    if (elapsed >= ROUND_DURATION) {
+      const allPlayers = Object.values(gameState.players)
+      const sorted     = [...allPlayers].sort((a, b) => b.point - a.point)
+      const winner     = sorted[0]?.nickname ?? 'Nobody'
+      const scores     = sorted.map(p => ({ nickname: p.nickname, point: p.point }))
+
+      broadcast(SOCKET_EVENTS.ROUND_END, { winner, scores })
+
+      // Reset round — resets matchStart first so next tick sees elapsed ≈ 0
+      gameState.matchStart = Date.now()
+      for (const p of allPlayers) p.point = 0
+    }
+
+    // ── Broadcast state ───────────────────────────────────────────────────────
+    const players = Object.values(gameState.players).map(p => p.toJSON())
+    const bullets = Object.values(gameState.bullets).map(b => b.toJSON())
+    const walls   = Object.values(gameState.walls).map(w => w.toJSON())
+    const roomIds = Object.keys(gameState.lobbyRooms)
 
     if (roomIds.length === 0) {
-      io.emit(SOCKET_EVENTS.STATE, serializedPlayers, serializedBullets, serializedWalls)
-      io.emit(SOCKET_EVENTS.MATCH_TIMER, matchTimer)
+      broadcast(SOCKET_EVENTS.STATE,       { players, bullets, walls })
+      broadcast(SOCKET_EVENTS.MATCH_TIMER, { remaining })
     } else {
-      roomIds.forEach((roomId) => {
-        io.to(roomId).emit(SOCKET_EVENTS.STATE, serializedPlayers, serializedBullets, serializedWalls)
-        io.to(roomId).emit(SOCKET_EVENTS.MATCH_TIMER, matchTimer)
-      })
+      for (const roomId of roomIds) {
+        broadcastToRoom(roomId, SOCKET_EVENTS.STATE,       { players, bullets, walls })
+        broadcastToRoom(roomId, SOCKET_EVENTS.MATCH_TIMER, { remaining })
+      }
     }
   }, TICK_RATE)
 
   return () => {
     clearInterval(loop)
-    bot.cleanup()
-    io.removeAllListeners()
-    io.close()
+    bots.forEach(b => b.cleanup())
+    wss.removeAllListeners()
+    wss.close()
   }
 }

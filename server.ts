@@ -3,10 +3,11 @@ import next from 'next'
 import { initializeSocket } from './socket-server'
 
 const dev = process.env.NODE_ENV !== 'production'
-const hostname = process.env.HOSTNAME || '0.0.0.0'
 const port = Number(process.env.PORT) || 3000
 
-const app = next({ dev, hostname, port })
+// Always bind to 0.0.0.0 — Replit's proxy forwards requests with a different
+// Host header than the container hostname, so locking to HOSTNAME causes 502s.
+const app = next({ dev, hostname: '0.0.0.0', port })
 const handle = app.getRequestHandler()
 
 app
@@ -16,8 +17,8 @@ app
 
     initializeSocket(httpServer)
 
-    httpServer.listen(port, hostname, () => {
-      console.log(`> Ready on http://${hostname}:${port}`)
+    httpServer.listen(port, '0.0.0.0', () => {
+      console.log(`> Ready on http://0.0.0.0:${port}`)
     })
   })
   .catch((error: unknown) => {

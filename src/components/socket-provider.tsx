@@ -1,33 +1,20 @@
 'use client'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { io, type Socket } from 'socket.io-client'
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
-import { SOCKET_PATH } from '@/lib/socket'
+import { GameSocket } from '@/lib/game-socket'
 
-type SocketProviderProps = {
-  children: React.ReactNode
-}
+const SocketContext = createContext<GameSocket | null>(null)
 
-const SocketContext = createContext<Socket | null>(null)
-
-export function SocketProvider({ children }: SocketProviderProps) {
-  const [socket, setSocket] = useState<Socket | null>(null)
+export function SocketProvider({ children }: { children: React.ReactNode }) {
+  const [socket, setSocket] = useState<GameSocket | null>(null)
   const queryClient = useMemo(() => new QueryClient(), [])
 
   useEffect(() => {
-    const socketPath = process.env.NEXT_PUBLIC_SOCKET_PATH ?? SOCKET_PATH
-    const instance = io('/', {
-      path: socketPath,
-      transports: ['websocket'],
-    })
-
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const instance = new GameSocket(`${protocol}//${window.location.host}/ws`)
     setSocket(instance)
-
-    return () => {
-      instance.disconnect()
-      setSocket(null)
-    }
+    return () => instance.disconnect()
   }, [])
 
   return (
